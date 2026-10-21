@@ -17,6 +17,7 @@ import type { Profile, Student } from '../../types/database.ts';
 import type { VisualProcessState } from '../../types/domain.ts';
 import { DEFAULT_JPEG_QUALITY } from '../../services/supabaseClient.ts';
 import {
+  computeGuideCropFromVideoElement,
   convertSourceToJpegBlob,
   processUploadedFileToJpeg
 } from '../../utils/photoProcessor.ts';
@@ -48,6 +49,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   const { showToast } = useToast();
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const guideRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -58,7 +60,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [jpegQuality, setJpegQuality] = useState<number>(DEFAULT_JPEG_QUALITY || 0.9);
 
-  // Estado de la fotografía capturada en memoria (no se pierde si falla la subida)
+  // Estado de la fotografía capturada y recortada en memoria
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [capturedPreviewUrl, setCapturedPreviewUrl] = useState<string | null>(null);
   const [capturedDimensions, setCapturedDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -138,7 +140,6 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         setCameraReady(true);
       }
 
-      // Listar cámaras disponibles una vez concedido el permiso
       if (navigator.mediaDevices.enumerateDevices) {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cameras = devices.filter((d) => d.kind === 'videoinput');
@@ -161,7 +162,13 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     setCapturedPreviewUrl(null);
     setCapturedDimensions(null);
     setSaveErrorMsg(null);
-    setProcessState(student.photo_status === 'completada' ? 'guardada' : 'pendiente');
+    setProcessState(
+      student.photo_status === 'completada'
+        ? 'guardada'
+        : student.photo_status === 'retirada'
+        ? 'retirada'
+        : 'pendiente'
+    );
     void startCamera();
 
     return () => {
@@ -178,27 +185,38 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       ? studentsList[currentIndex + 1]
       : null;
 
-  const nextPendingStudent = studentsList.find(
-    (s, idx) => idx > currentIndex && s.photo_status === 'pendiente'
-  ) || studentsList.find((s) => s.id !== student.id && s.photo_status === 'pendiente') || null;
+  const nextPendingStudent =
+    studentsList.find((s, idx) => idx > currentIndex && s.photo_status === 'pendiente') ||
+    studentsList.find((s) => s.id !== student.id && s.photo_status === 'pendiente') ||
+    null;
 
+  /**
+   * Captura el fotograma actual y lo recorta exactamente según el recuadro de
+   * "Encuadre sugerido" visible en la pantalla (proporción vertical 3:4).
+   */
   const handleCaptureFromVideo = async () => {
     if (!videoRef.current || !cameraReady) return;
     setSaveErrorMsg(null);
 
     try {
       const videoEl = videoRef.current;
+      const cropRect = computeGuideCropFromVideoElement(videoEl, guideRef.current);
+
       const result = await convertSourceToJpegBlob(
         videoEl,
         videoEl.videoWidth || 1280,
         videoEl.videoHeight || 960,
-        { quality: jpegQuality, maxDimension: 1440 }
+        {
+          quality: jpegQuality,
+          maxDimension: 1200,
+          cropRect,
+          enforceCarnetAspect: true
+        }
       );
 
       setCapturedBlob(result.blob);
       setCapturedPreviewUrl(result.dataUrl);
       setCapturedDimensions({ width: result.width, height: result.height });
-      // Detener temporalmente la vista previa de vídeo mientras revisa la foto capturada
       stopCameraTracks();
     } catch (err) {
       const normalized = normalizeError(err);
@@ -225,7 +243,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     try {
       const result = await processUploadedFileToJpeg(file, {
         quality: jpegQuality,
-        maxDimension: 1440
+        maxDimension: 1200,
+        enforceCarnetAspect: true
       });
       stopCameraTracks();
       setCapturedBlob(result.blob);
@@ -257,7 +276,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       showToast(
         'success',
         'Fotografía guardada correctamente',
-        `Se registró la fotografía JPG de ${updated.full_name} (DNI: ${updated.dni}).`
+        `Se registró la fotografía recortada de ${updated.full_name} (${updated.dni}.jpg).`
       );
     } catch (err) {
       const normalized = normalizeError(err);
@@ -288,355 +307,317 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/75 p-2 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/80 p-2 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="camera-modal-title"
     >
-      <div className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto">
-        {/* Encabezado con datos de la estudiante y estado visual */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-4 bg-slate-900 text-white">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-xs text-sky-300 font-medium uppercase tracking-wider">
-              <span>{student.education_level || 'Secundaria'}</span>
-              <span>•</span>
-              <span>
-                Grado {student.grade} - Sección {student.section}
-              </span>
-              {currentIndex >= 0 && (
-                <>
-                  <span>•</span>
-                  <span>
-                    Estudiante {currentIndex + 1} de {studentsList.length}
-                  </span>
-                </>
-              )}
-            </div>
-            <h2
-              id="camera-modal-title"
-              className="text-base sm:text-lg font-bold truncate mt-0.5"
-            >
-              {student.full_name}
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-300 font-mono mt-0.5">
-              DNI: <strong className="text-white">{student.dni}</strong> (Nombre de archivo: {student.dni}.jpg)
-            </p>
+      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto">
+        {/* Barra superior compacta */}
+        <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 bg-slate-900 text-white">
+          <div className="flex items-center gap-2 text-xs text-sky-300 font-semibold">
+            <span>
+              {student.grade} "{student.section}"
+            </span>
+            {currentIndex >= 0 && (
+              <>
+                <span>•</span>
+                <span>
+                  #{currentIndex + 1} de {studentsList.length}
+                </span>
+              </>
+            )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <StatusBadge state={processState} />
+          <div className="flex items-center gap-2">
+            <StatusBadge state={processState} size="sm" />
             <button
               type="button"
               onClick={handleCloseModal}
-              className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700"
+              className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700"
               aria-label="Cerrar módulo de cámara"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
         {/* Alerta de desconexión a Internet */}
         {!isOnline && (
-          <div className="flex items-center gap-2.5 px-6 py-3 bg-amber-50 border-b border-amber-200 text-amber-900 text-xs sm:text-sm">
+          <div className="flex items-center gap-2 px-3.5 py-2 bg-amber-50 border-b border-amber-200 text-amber-900 text-xs">
             <WifiOff className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              <strong>Sin conexión a Internet:</strong> Puede capturar la fotografía ahora; se mantendrá segura en pantalla para reintentar el guardado en la nube apenas vuelva la red.
+              <strong>Sin Internet:</strong> La captura se mantendrá en pantalla para reintentar al recuperar red.
             </span>
           </div>
         )}
 
-        {/* Cuerpo principal del módulo de cámara */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 p-4 sm:p-6">
-          {/* Visor de cámara o imagen capturada */}
-          <div className="lg:col-span-7 flex flex-col items-center">
-            <div className="relative w-full aspect-4/3 bg-slate-950 rounded-xl overflow-hidden border border-slate-300 flex items-center justify-center shadow-inner">
-              {!capturedPreviewUrl ? (
-                <>
-                  <video
-                    ref={videoRef}
-                    playsInline
-                    muted
-                    autoPlay
-                    className="w-full h-full object-cover"
-                  />
+        <div className="p-3 sm:p-4 space-y-3">
+          {/* 1. VENTANA DE LA CÁMARA CON RECORTE AL ENCUADRE SUGERIDO */}
+          <div className="relative w-full h-[44vh] max-h-[360px] min-h-[250px] bg-slate-950 rounded-xl overflow-hidden border border-slate-300 flex items-center justify-center shadow-inner">
+            {!capturedPreviewUrl ? (
+              <>
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  autoPlay
+                  className="w-full h-full object-cover"
+                />
 
-                  {/* Guía visual de encuadre tipo carnet escolar */}
-                  {cameraReady && (
-                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                      <div className="w-48 h-60 sm:w-56 sm:h-72 border-2 border-dashed border-sky-400/70 rounded-2xl flex flex-col justify-between p-2">
-                        <span className="text-[10px] font-medium text-sky-200 bg-slate-900/60 px-2 py-0.5 rounded self-center">
-                          Encuadre sugerido
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {!cameraReady && !cameraError && (
-                    <div className="flex flex-col items-center gap-2 text-slate-300 p-6 text-center">
-                      <Loader2 className="w-8 h-8 animate-spin text-sky-400" />
-                      <p className="text-sm">Iniciando cámara del dispositivo...</p>
-                    </div>
-                  )}
-
-                  {cameraError && (
-                    <div className="flex flex-col items-center gap-3 text-center p-6 max-w-md">
-                      <div className="p-3 rounded-full bg-rose-500/20 text-rose-300">
-                        <AlertCircle className="w-7 h-7" />
-                      </div>
-                      <p className="text-sm text-slate-200 leading-relaxed">{cameraError}</p>
-                      <div className="flex flex-wrap justify-center gap-2 mt-2">
-                        <button
-                          type="button"
-                          onClick={() => void startCamera()}
-                          className="px-3.5 py-2 text-xs font-semibold bg-white text-slate-900 rounded-lg hover:bg-slate-100"
-                        >
-                          Reintentar cámara
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="px-3.5 py-2 text-xs font-semibold bg-sky-600 text-white rounded-lg hover:bg-sky-500"
-                        >
-                          Seleccionar imagen del equipo
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="relative w-full h-full flex items-center justify-center bg-slate-950">
-                  <img
-                    src={capturedPreviewUrl}
-                    alt={`Captura previa de ${student.full_name}`}
-                    className="max-w-full max-h-full object-contain"
-                  />
-                  <span className="absolute top-3 left-3 bg-slate-900/80 text-white text-xs px-2.5 py-1 rounded-md font-medium">
-                    Vista previa JPEG ({capturedDimensions?.width}×{capturedDimensions?.height}px •{' '}
-                    {capturedBlob ? `${Math.round(capturedBlob.size / 1024)} KB` : ''})
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* Controles secundarios de dispositivo de cámara y calidad JPEG */}
-            <div className="w-full flex flex-wrap items-center justify-between gap-2 mt-3">
-              <div className="flex items-center gap-2">
-                {!capturedPreviewUrl && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handleSwitchFacingMode}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg"
-                      title="Alternar cámara frontal / trasera en celulares o tablets"
+                {/* Guía visual de encuadre 3:4 (oscurece el exterior para mostrar exactamente el área que se recortará) */}
+                {cameraReady && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
+                    <div
+                      ref={guideRef}
+                      className="h-[84%] aspect-3/4 border-2 border-dashed border-sky-400 rounded-xl flex flex-col justify-between p-1.5 shadow-[0_0_0_9999px_rgba(2,6,23,0.52)]"
                     >
-                      <FlipHorizontal className="w-3.5 h-3.5" />
-                      <span>Cámara {facingMode === 'user' ? 'Frontal' : 'Trasera'}</span>
-                    </button>
-
-                    {videoDevices.length > 1 && (
-                      <select
-                        value={selectedDeviceId}
-                        onChange={(e) => setSelectedDeviceId(e.target.value)}
-                        aria-label="Seleccionar dispositivo de cámara"
-                        className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700 max-w-[200px]"
-                      >
-                        <option value="">Automática ({facingMode})</option>
-                        {videoDevices.map((dev, idx) => (
-                          <option key={dev.deviceId || idx} value={dev.deviceId}>
-                            {dev.label || `Cámara ${idx + 1}`}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </>
+                      <span className="text-[10px] font-semibold text-sky-100 bg-slate-900/75 px-2 py-0.5 rounded self-center">
+                        Área de recorte (3:4)
+                      </span>
+                    </div>
+                  </div>
                 )}
-              </div>
 
-              <div className="flex items-center gap-2 text-xs text-slate-600">
-                <Sliders className="w-3.5 h-3.5 text-slate-400" />
-                <label htmlFor="jpeg-quality-select">Calidad JPG:</label>
-                <select
-                  id="jpeg-quality-select"
-                  value={jpegQuality}
-                  onChange={(e) => setJpegQuality(Number(e.target.value))}
-                  disabled={Boolean(capturedPreviewUrl)}
-                  className="border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-800 font-medium disabled:opacity-50"
-                >
-                  <option value={0.95}>Alta (0.95)</option>
-                  <option value={0.9}>Estándar Institucional (0.90)</option>
-                  <option value={0.82}>Optimizada (0.82)</option>
-                </select>
+                {!cameraReady && !cameraError && (
+                  <div className="flex flex-col items-center gap-2 text-slate-300 p-4 text-center">
+                    <Loader2 className="w-7 h-7 animate-spin text-sky-400" />
+                    <p className="text-xs sm:text-sm">Iniciando cámara...</p>
+                  </div>
+                )}
+
+                {cameraError && (
+                  <div className="flex flex-col items-center gap-2.5 text-center p-4 max-w-sm">
+                    <div className="p-2.5 rounded-full bg-rose-500/20 text-rose-300">
+                      <AlertCircle className="w-6 h-6" />
+                    </div>
+                    <p className="text-xs text-slate-200 leading-relaxed">{cameraError}</p>
+                    <div className="flex flex-wrap justify-center gap-2 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => void startCamera()}
+                        className="px-3 py-1.5 text-xs font-semibold bg-white text-slate-900 rounded-lg hover:bg-slate-100"
+                      >
+                        Reintentar cámara
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-3 py-1.5 text-xs font-semibold bg-sky-600 text-white rounded-lg hover:bg-sky-500"
+                      >
+                        Subir desde dispositivo
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Botón flotante para girar cámara (Frontal / Trasera) dentro de la esquina del visor */}
+                {cameraReady && (
+                  <button
+                    type="button"
+                    onClick={handleSwitchFacingMode}
+                    className="absolute bottom-2.5 right-2.5 z-10 inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-white bg-slate-900/80 hover:bg-slate-900 border border-white/20 rounded-lg backdrop-blur-xs cursor-pointer"
+                    title="Cambiar entre cámara frontal y trasera"
+                  >
+                    <FlipHorizontal className="w-3.5 h-3.5 text-sky-400" />
+                    <span>{facingMode === 'user' ? 'Frontal' : 'Trasera'}</span>
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="relative w-full h-full flex items-center justify-center bg-slate-950 p-2">
+                <img
+                  src={capturedPreviewUrl}
+                  alt={`Fotografía recortada de ${student.full_name}`}
+                  className="h-full aspect-3/4 object-cover rounded-lg border-2 border-emerald-400/80 shadow-lg"
+                />
+                <span className="absolute top-2.5 left-2.5 bg-slate-900/85 text-white text-[11px] px-2 py-0.5 rounded font-medium">
+                  Recortada ({capturedDimensions?.width}×{capturedDimensions?.height}px •{' '}
+                  {capturedBlob ? `${Math.round(capturedBlob.size / 1024)} KB` : ''})
+                </span>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* Panel lateral derecho: Botones grandes de acción y verificación de identidad */}
-          <div className="lg:col-span-5 flex flex-col justify-between bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5">
-            <div className="space-y-4">
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  Verificación de identidad antes de guardar
+          {/* 2. JUSTO DEBAJO DE LA CÁMARA: NOMBRE DE LA ESTUDIANTE + DNI */}
+          <div className="bg-slate-50 px-3.5 py-2.5 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <h2
+                id="camera-modal-title"
+                className="text-sm sm:text-base font-bold text-slate-900 truncate leading-snug"
+              >
+                {student.full_name}
+              </h2>
+              <p className="text-xs text-slate-600 font-mono">
+                DNI: <strong className="text-slate-900">{student.dni}</strong> •{' '}
+                <span>
+                  {student.grade} "{student.section}"
                 </span>
-                <p className="text-sm font-bold text-slate-900 mt-1">{student.full_name}</p>
-                <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-100 text-xs">
-                  <div>
-                    <span className="text-slate-500 block">DNI (Archivo JPG):</span>
-                    <span className="font-mono font-bold text-slate-900 text-sm">
-                      {student.dni}.jpg
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-500 block">Grado y Sección:</span>
-                    <span className="font-semibold text-slate-900 text-sm">
-                      {student.grade} "{student.section}"
-                    </span>
-                  </div>
+              </p>
+            </div>
+            <span className="text-[11px] font-mono font-semibold px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 shrink-0">
+              {student.dni}.jpg
+            </span>
+          </div>
+
+          {/* Mensaje de error si falló el guardado */}
+          {saveErrorMsg && (
+            <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>{saveErrorMsg}</span>
+            </div>
+          )}
+
+          {/* 3. BOTÓN PRINCIPAL DE CAPTURA / GUARDADO INMEDIATAMENTE VISIBLE SIN SCROLL */}
+          {!capturedPreviewUrl ? (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => void handleCaptureFromVideo()}
+                disabled={!cameraReady || processState === 'procesando'}
+                className="w-full py-3.5 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-bold text-base shadow-md flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:cursor-not-allowed"
+              >
+                <Camera className="w-5 h-5" />
+                <span>Capturar fotografía</span>
+              </button>
+
+              {/* Controles secundarios compactos en una sola fila */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleFileUploadChange}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={processState === 'procesando'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Subir archivo</span>
+                </button>
+
+                {videoDevices.length > 1 && (
+                  <select
+                    value={selectedDeviceId}
+                    onChange={(e) => setSelectedDeviceId(e.target.value)}
+                    aria-label="Seleccionar dispositivo de cámara"
+                    className="text-xs border border-slate-300 rounded-lg px-2 py-1 bg-white text-slate-700 max-w-[160px]"
+                  >
+                    <option value="">Cámara auto ({facingMode})</option>
+                    {videoDevices.map((dev, idx) => (
+                      <option key={dev.deviceId || idx} value={dev.deviceId}>
+                        {dev.label || `Cámara ${idx + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <div className="flex items-center gap-1 text-xs text-slate-600 ml-auto">
+                  <Sliders className="w-3.5 h-3.5 text-slate-400" />
+                  <select
+                    id="jpeg-quality-select"
+                    value={jpegQuality}
+                    onChange={(e) => setJpegQuality(Number(e.target.value))}
+                    aria-label="Calidad JPG"
+                    className="border border-slate-300 rounded-lg px-2 py-1 bg-white text-slate-800 font-medium"
+                  >
+                    <option value={0.95}>JPG 0.95</option>
+                    <option value={0.9}>JPG 0.90</option>
+                    <option value={0.82}>JPG 0.82</option>
+                  </select>
                 </div>
               </div>
-
-              {saveErrorMsg && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs leading-relaxed flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold">Error en la operación</p>
-                    <p className="mt-0.5">{saveErrorMsg}</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Botones grandes para las acciones principales de cámara */}
-              {!capturedPreviewUrl ? (
-                <div className="space-y-3 pt-1">
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {processState !== 'guardada' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                   <button
                     type="button"
-                    onClick={() => void handleCaptureFromVideo()}
-                    disabled={!cameraReady || processState === 'procesando'}
-                    className="w-full py-4 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-bold text-base shadow-md flex items-center justify-center gap-3 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                    onClick={handleRequestSave}
+                    disabled={processState === 'procesando'}
+                    className="sm:col-span-8 py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold text-base shadow-md flex items-center justify-center gap-2 transition-colors cursor-pointer"
                   >
-                    <Camera className="w-6 h-6" />
-                    <span>Capturar fotografía</span>
+                    {processState === 'procesando' ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span>Guardando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-5 h-5" />
+                        <span>{saveErrorMsg ? 'Reintentar guardado' : 'Guardar fotografía'}</span>
+                      </>
+                    )}
                   </button>
 
-                  <div className="relative flex py-1 items-center">
-                    <div className="grow border-t border-slate-200" />
-                    <span className="shrink mx-3 text-xs text-slate-400">o alternativa local</span>
-                    <div className="grow border-t border-slate-200" />
-                  </div>
-
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleFileUploadChange}
-                    className="hidden"
-                  />
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={handleRetakePhoto}
                     disabled={processState === 'procesando'}
-                    className="w-full py-3 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    className="sm:col-span-4 py-3 px-3 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                   >
-                    <Upload className="w-4 h-4" />
-                    <span>Seleccionar imagen desde el dispositivo</span>
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Repetir</span>
                   </button>
                 </div>
               ) : (
-                <div className="space-y-3 pt-1">
-                  {processState !== 'guardada' ? (
-                    <>
+                <div className="space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    {nextPendingStudent ? (
                       <button
                         type="button"
-                        onClick={handleRequestSave}
-                        disabled={processState === 'procesando'}
-                        className="w-full py-4 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold text-base shadow-md flex items-center justify-center gap-3 transition-colors cursor-pointer"
+                        onClick={() => onSelectStudent(nextPendingStudent)}
+                        className="sm:col-span-8 py-3.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm sm:text-base flex items-center justify-center gap-2 shadow-sm cursor-pointer"
                       >
-                        {processState === 'procesando' ? (
-                          <>
-                            <Loader2 className="w-5 h-5 animate-spin" />
-                            <span>Subiendo a la nube...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Check className="w-6 h-6" />
-                            <span>
-                              {saveErrorMsg ? 'Reintentar guardado' : 'Guardar fotografía'}
-                            </span>
-                          </>
-                        )}
+                        <span>Siguiente estudiante pendiente</span>
+                        <ChevronRight className="w-5 h-5" />
                       </button>
-
-                      <button
-                        type="button"
-                        onClick={handleRetakePhoto}
-                        disabled={processState === 'procesando'}
-                        className="w-full py-3 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                        <span>Repetir toma</span>
-                      </button>
-                    </>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs sm:text-sm font-medium flex items-center gap-2.5">
-                        <Check className="w-5 h-5 text-emerald-600 shrink-0" />
-                        <span>
-                          Fotografía confirmada y almacenada en el bucket privado como{' '}
-                          <strong>{student.dni}.jpg</strong>.
-                        </span>
+                    ) : (
+                      <div className="sm:col-span-8 py-2.5 px-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-center gap-1.5">
+                        <Check className="w-4 h-4 text-emerald-600" />
+                        <span>Guardada como {student.dni}.jpg</span>
                       </div>
+                    )}
 
-                      {nextPendingStudent && (
-                        <button
-                          type="button"
-                          onClick={() => onSelectStudent(nextPendingStudent)}
-                          className="w-full py-3.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-sm cursor-pointer"
-                        >
-                          <span>Continuar con siguiente pendiente</span>
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={handleRetakePhoto}
-                        className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-medium text-xs flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Tomar otra fotografía para reemplazar</span>
-                      </button>
-                    </div>
-                  )}
+                    <button
+                      type="button"
+                      onClick={handleRetakePhoto}
+                      className="sm:col-span-4 py-2.5 px-3 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Otra toma</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
+          )}
 
-            {/* Navegación continua entre estudiantes sin regresar a la lista general */}
-            <div className="mt-6 pt-4 border-t border-slate-200">
-              <span className="text-[11px] font-medium text-slate-500 block mb-2">
-                Navegación rápida en la sección actual:
-              </span>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => prevStudent && onSelectStudent(prevStudent)}
-                  disabled={!prevStudent || processState === 'procesando'}
-                  className="py-2.5 px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 text-xs font-semibold text-slate-700 flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                  <span>Anterior</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => nextStudent && onSelectStudent(nextStudent)}
-                  disabled={!nextStudent || processState === 'procesando'}
-                  className="py-2.5 px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 text-xs font-semibold text-slate-700 flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  <span>Siguiente</span>
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
+          {/* 4. NAVEGACIÓN RÁPIDA ANTERIOR / SIGUIENTE COMPACTA */}
+          <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => prevStudent && onSelectStudent(prevStudent)}
+              disabled={!prevStudent || processState === 'procesando'}
+              className="py-2 px-3 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 text-xs font-semibold text-slate-700 flex items-center justify-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Anterior</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => nextStudent && onSelectStudent(nextStudent)}
+              disabled={!nextStudent || processState === 'procesando'}
+              className="py-2 px-3 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 text-xs font-semibold text-slate-700 flex items-center justify-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+            >
+              <span>Siguiente</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
@@ -645,7 +626,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       <ConfirmDialog
         open={confirmReplaceOpen}
         title="¿Reemplazar fotografía existente?"
-        description={`La estudiante ${student.full_name} (DNI: ${student.dni}) ya cuenta con una fotografía guardada en la nube. Al confirmar, se actualizará por la nueva captura sin perder datos en caso de fallo de red.`}
+        description={`La estudiante ${student.full_name} (DNI: ${student.dni}) ya cuenta con una fotografía guardada en la nube. Al confirmar, se actualizará por la nueva captura recortada.`}
         confirmLabel="Sí, reemplazar fotografía"
         cancelLabel="Cancelar"
         variant="warning"

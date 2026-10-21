@@ -17,7 +17,8 @@ import {
   deleteStudentRecord,
   fetchImportBatches,
   fetchStudents,
-  subscribeToStudentsChanges
+  subscribeToStudentsChanges,
+  toggleStudentRetiredStatus
 } from './services/studentService.ts';
 import { IS_SUPABASE_CONFIGURED, supabase } from './services/supabaseClient.ts';
 import { AppLayout } from './components/layout/AppLayout.tsx';
@@ -131,6 +132,36 @@ const AuthenticatedWorkspace: React.FC<{
     }
   };
 
+  const handleToggleRetiredStudent = async (
+    student: Student,
+    markRetired: boolean
+  ) => {
+    try {
+      const updated = await toggleStudentRetiredStatus(
+        profile,
+        student,
+        markRetired
+      );
+      setStudents((prev) =>
+        prev.map((s) => (s.id === updated.id ? updated : s))
+      );
+      showToast(
+        'info',
+        markRetired ? 'Marcada como Retirada' : 'Estudiante reactivada',
+        markRetired
+          ? `${updated.full_name} fue registrada como trasladada a otra I.E. (Retirada).`
+          : `${updated.full_name} fue reactivada en su sección.`
+      );
+    } catch (err) {
+      const normalized = normalizeError(err);
+      showToast(
+        'error',
+        'No se pudo actualizar la condición',
+        normalized.userMessage
+      );
+    }
+  };
+
   const handleNavigateToSection = (grade: string, section: string) => {
     setFilters({
       ...DEFAULT_FILTERS,
@@ -179,6 +210,7 @@ const AuthenticatedWorkspace: React.FC<{
               onChangeFilters={setFilters}
               onOpenCamera={handleOpenCamera}
               onViewPhoto={(s) => setViewerStudent(s)}
+              onToggleRetiredStudent={handleToggleRetiredStudent}
               onDeleteStudent={handleDeleteStudent}
             />
           }

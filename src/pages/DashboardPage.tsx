@@ -84,7 +84,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
               {stats.totalStudents}
             </p>
-            <p className="text-xs text-slate-500 mt-1">Estudiantes en el padrón</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {stats.retiredStudents > 0
+                ? `${stats.totalStudents - stats.retiredStudents} activas • ${stats.retiredStudents} retiradas`
+                : 'Estudiantes en el padrón'}
+            </p>
           </div>
           <div className="p-3 rounded-xl bg-slate-100 text-slate-700">
             <Users className="w-5 h-5" />
@@ -179,7 +183,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                         {item.educationLevel}
                       </span>
                     </div>
-                    <div className="flex items-center gap-4 text-xs text-slate-500 mt-1">
+                    <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 mt-1">
                       <span>Total: {item.total}</span>
                       <span className="text-emerald-700 font-medium">
                         Fotografiadas: {item.completed}
@@ -187,6 +191,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                       <span className="text-amber-700 font-medium">
                         Pendientes: {item.pending}
                       </span>
+                      {item.retired > 0 && (
+                        <span className="text-slate-600 font-medium">
+                          Retiradas: {item.retired}
+                        </span>
+                      )}
                     </div>
                   </div>
 

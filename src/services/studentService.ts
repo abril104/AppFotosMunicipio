@@ -297,6 +297,64 @@ export async function deleteStudentRecord(
 }
 
 /**
+ * Marca a una estudiante como 'retirada' (trasladada a otra I.E.) o la reactiva
+ * a su estado normal ('completada' si ya tenía foto o 'pendiente' si no tenía).
+ */
+export async function toggleStudentRetiredStatus(
+  currentProfile: Profile,
+  student: Student,
+  markRetired: boolean
+): Promise<Student> {
+  const perm = checkActionPermission(
+    { userId: currentProfile.id, role: currentProfile.role, isActive: currentProfile.is_active },
+    'CAPTURE_PHOTO'
+  );
+  if (!perm.allowed) {
+    throw new AppError('AUTH_FORBIDDEN_ROLE', perm.reason || 'Permiso denegado.', false);
+  }
+
+  const nextStatus = markRetired
+    ? ('retirada' as const)
+    : student.photo_path
+    ? ('completada' as const)
+    : ('pendiente' as const);
+
+  const nowIso = new Date().toISOString();
+
+  if (!IS_SUPABASE_CONFIGURED || !supabase) {
+    return updateDemoStudentRecord(student.id, (prev) => ({
+      ...prev,
+      photo_status: nextStatus,
+      updated_at: nowIso
+    }));
+  }
+
+  const { data, error } = await supabase
+    .from('students')
+    .update({
+      photo_status: nextStatus,
+      updated_at: nowIso
+    })
+    .eq('id', student.id)
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    const rawMsg = String(error?.message || '').toLowerCase();
+    if (rawMsg.includes('photo_status_type') || rawMsg.includes('chk_students_photo_consistency')) {
+      throw new AppError(
+        'DATABASE_OPERATION_FAILED',
+        'Para activar el estado "Retirada" en Supabase, ejecute el archivo supabase/migrations/003_add_retirada_status.sql en el SQL Editor de su proyecto.',
+        false
+      );
+    }
+    throw normalizeError(error, 'No se pudo actualizar la condición de la estudiante.');
+  }
+
+  return data as Student;
+}
+
+/**
  * Consulta el historial de lotes de importación de padrón.
  */
 export async function fetchImportBatches(): Promise<ImportBatch[]> {

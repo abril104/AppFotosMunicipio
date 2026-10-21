@@ -20,7 +20,8 @@ import {
 } from '../src/utils/academicFilter.ts';
 import {
   buildDeterministicPhotoPath,
-  buildZipPhotoEntryPath
+  buildZipPhotoEntryPath,
+  computeCenteredCarnetCrop
 } from '../src/utils/photoProcessor.ts';
 import {
   checkActionPermission,
@@ -185,10 +186,28 @@ describe('Fase 4: Organización Académica, Filtros y Estadísticas', () => {
     assert.equal(dashboard.byGradeSection.length, 2);
     assert.equal(dashboard.recentPhotos.length, 1);
     assert.equal(dashboard.recentPhotos[0].dni, '01111111');
+
+    // Si una estudiante pendiente pasa a condición 'retirada' (trasladada a otra I.E.), se descuenta de pendientes
+    const rosterWithRetired: Student[] = sampleRoster.map((s) =>
+      s.id === 's3' ? { ...s, photo_status: 'retirada' } : s
+    );
+    const metricsWithRetired = calculateProgressMetrics(rosterWithRetired);
+    assert.equal(metricsWithRetired.total, 3);
+    assert.equal(metricsWithRetired.retired, 1);
+    assert.equal(metricsWithRetired.photographed, 1);
+    assert.equal(metricsWithRetired.pending, 1);
+    assert.equal(metricsWithRetired.percentage, 50);
   });
 });
 
-describe('Fase 5 y 6: Rutas Deterministas de Almacenamiento y Estructura ZIP', () => {
+describe('Fase 5 y 6: Rutas Deterministas de Almacenamiento, Recorte 3:4 y Estructura ZIP', () => {
+  it('calcula el recorte vertical 3:4 centrado en relación al encuadre sugerido', () => {
+    const crop = computeCenteredCarnetCrop(1280, 960);
+    assert.equal(crop.sh, 806);
+    assert.equal(crop.sw, 605); // ~3:4 proporción vertical
+    assert.equal(crop.sx > 0, true);
+    assert.equal(crop.sy > 0, true);
+  });
   it('construye ruta determinista en bucket privado y valida DNI de 8 dígitos', () => {
     const path = buildDeterministicPhotoPath('uuid-est-01', '01234567');
     assert.equal(path, 'padron/uuid-est-01/01234567.jpg');

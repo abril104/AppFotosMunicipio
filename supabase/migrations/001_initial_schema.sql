@@ -18,7 +18,7 @@ EXCEPTION
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE public.photo_status_type AS ENUM ('pendiente', 'completada');
+    CREATE TYPE public.photo_status_type AS ENUM ('pendiente', 'completada', 'retirada');
 EXCEPTION
     WHEN duplicate_object THEN NULL;
 END $$;
@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS public.students (
     -- Coherencia entre estado de la fotografía y ruta de archivo
     CONSTRAINT chk_students_photo_consistency CHECK (
         (photo_status = 'pendiente' AND photo_path IS NULL)
+        OR
+        (photo_status = 'retirada')
         OR
         (photo_status = 'completada' AND photo_path IS NOT NULL AND char_length(trim(photo_path)) > 0)
     )

@@ -1,6 +1,6 @@
 export type UserRole = 'admin' | 'operator';
 
-export type PhotoStatus = 'pendiente' | 'completada';
+export type PhotoStatus = 'pendiente' | 'completada' | 'retirada';
 
 export interface Profile {
   id: string;

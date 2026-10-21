@@ -1,6 +1,6 @@
 import type { PhotoStatus, Student, UserRole } from './database.ts';
 
-export type VisualProcessState = 'pendiente' | 'guardada' | 'procesando' | 'error';
+export type VisualProcessState = 'pendiente' | 'guardada' | 'retirada' | 'procesando' | 'error';
 
 export interface ColumnMapping {
   dni: string;
@@ -70,6 +70,7 @@ export interface GradeSectionStats {
   total: number;
   completed: number;
   pending: number;
+  retired: number;
   percentage: number;
 }
 
@@ -77,6 +78,7 @@ export interface DashboardStats {
   totalStudents: number;
   completedPhotos: number;
   pendingPhotos: number;
+  retiredStudents: number;
   overallPercentage: number;
   byGradeSection: GradeSectionStats[];
   recentPhotos: Student[];

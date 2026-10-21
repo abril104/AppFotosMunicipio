@@ -93,7 +93,7 @@ export async function exportStudentPhotosToZip(
     (s) => s.photo_status === 'completada' && Boolean(s.photo_path)
   );
   const pendingStudents = scopedStudents.filter(
-    (s) => s.photo_status !== 'completada' || !s.photo_path
+    (s) => s.photo_status === 'pendiente'
   );
 
   if (photographedStudents.length === 0 && !options.includePendingReport) {

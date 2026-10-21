@@ -59,16 +59,89 @@ export function buildZipPhotoEntryPath(student: Pick<Student, 'dni' | 'grade' | 
   return `Fotografias_Estudiantes/${gradeFolder}_${sectionFolder}/${cleanDni}.jpg`;
 }
 
+export interface CropRect {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+}
+
 export interface JpegConversionOptions {
   quality?: number; // Entre 0.70 y 0.98, por defecto 0.90
-  maxDimension?: number; // Por defecto 1440px para uso institucional nítido sin peso excesivo
+  maxDimension?: number; // Por defecto 1200px de alto para formato carnet institucional nítido
+  cropRect?: CropRect; // Región exacta del encuadre sugerido
+  enforceCarnetAspect?: boolean; // Si es true (por defecto), recorta en proporción vertical 3:4
 }
 
 /**
- * Procesa una captura de vídeo o un archivo de imagen seleccionado en el navegador
- * y genera un único Blob en formato JPEG (`image/jpeg`) con la calidad configurada (0.90),
- * corrigiendo orientación mediante createImageBitmap (cuando está disponible) y evitando
- * reconversiones repetidas que degraden la calidad.
+ * Calcula el rectángulo exacto de recorte sobre los píxeles reales del vídeo (`videoWidth` × `videoHeight`)
+ * que corresponde al recuadro de "Encuadre sugerido" visible en la pantalla (`guideRect` respecto a `videoRect`),
+ * teniendo en cuenta que el elemento `<video>` utiliza `object-cover`.
+ */
+export function computeGuideCropFromVideoElement(
+  videoEl: HTMLVideoElement,
+  guideEl: HTMLElement | null
+): CropRect {
+  const vw = videoEl.videoWidth || 1280;
+  const vh = videoEl.videoHeight || 960;
+
+  if (guideEl) {
+    const vRect = videoEl.getBoundingClientRect();
+    const gRect = guideEl.getBoundingClientRect();
+
+    if (vRect.width > 0 && vRect.height > 0 && gRect.width > 0 && gRect.height > 0) {
+      // Con object-cover, el vídeo se escala uniformemente para cubrir vRect
+      const scale = Math.max(vRect.width / vw, vRect.height / vh);
+      const renderedWidth = vw * scale;
+      const renderedHeight = vh * scale;
+
+      // Desplazamiento del vídeo centrado dentro de vRect
+      const offsetX = (renderedWidth - vRect.width) / 2;
+      const offsetY = (renderedHeight - vRect.height) / 2;
+
+      // Posición del recuadro guía dentro de la imagen renderizada
+      const guideXInRendered = (gRect.left - vRect.left) + offsetX;
+      const guideYInRendered = (gRect.top - vRect.top) + offsetY;
+
+      const sx = Math.max(0, Math.round(guideXInRendered / scale));
+      const sy = Math.max(0, Math.round(guideYInRendered / scale));
+      const sw = Math.min(vw - sx, Math.round(gRect.width / scale));
+      const sh = Math.min(vh - sy, Math.round(gRect.height / scale));
+
+      if (sw > 40 && sh > 40) {
+        return { sx, sy, sw, sh };
+      }
+    }
+  }
+
+  return computeCenteredCarnetCrop(vw, vh);
+}
+
+/**
+ * Calcula un recorte vertical centrado en proporción 3:4 (tipo carnet escolar)
+ * cuando no se dispone de coordenadas de guía DOM o al subir un archivo.
+ */
+export function computeCenteredCarnetCrop(sourceWidth: number, sourceHeight: number): CropRect {
+  const targetAspect = 3 / 4; // Ancho / Alto (formato carnet vertical)
+  // En una toma de cámara horizontal o vertical, el encuadre ocupa ~82% de la altura
+  let sh = Math.round(sourceHeight * 0.84);
+  let sw = Math.round(sh * targetAspect);
+
+  if (sw > sourceWidth * 0.88) {
+    sw = Math.round(sourceWidth * 0.88);
+    sh = Math.round(sw / targetAspect);
+  }
+
+  const sx = Math.max(0, Math.round((sourceWidth - sw) / 2));
+  const sy = Math.max(0, Math.round((sourceHeight - sh) / 2));
+
+  return { sx, sy, sw, sh };
+}
+
+/**
+ * Procesa una captura de vídeo o un archivo de imagen seleccionado en el navegador,
+ * recorta la imagen exactamente en relación al encuadre sugerido (formato carnet 3:4)
+ * y genera un único Blob en formato JPEG (`image/jpeg`) con la calidad configurada (0.90).
  */
 export async function convertSourceToJpegBlob(
   source: HTMLVideoElement | HTMLImageElement | ImageBitmap,
@@ -77,14 +150,21 @@ export async function convertSourceToJpegBlob(
   options: JpegConversionOptions = {}
 ): Promise<{ blob: Blob; dataUrl: string; width: number; height: number }> {
   const quality = Math.min(0.98, Math.max(0.7, options.quality ?? 0.9));
-  const maxDimension = options.maxDimension ?? 1440;
+  const maxDimension = options.maxDimension ?? 1200;
+  const enforceCarnetAspect = options.enforceCarnetAspect ?? true;
 
   if (sourceWidth <= 0 || sourceHeight <= 0) {
     throw new AppError('VALIDATION_ERROR', 'Dimensiones de imagen inválidas al capturar la fotografía.', true);
   }
 
-  let targetWidth = sourceWidth;
-  let targetHeight = sourceHeight;
+  const crop: CropRect =
+    options.cropRect ||
+    (enforceCarnetAspect
+      ? computeCenteredCarnetCrop(sourceWidth, sourceHeight)
+      : { sx: 0, sy: 0, sw: sourceWidth, sh: sourceHeight });
+
+  let targetWidth = crop.sw;
+  let targetHeight = crop.sh;
 
   if (targetWidth > maxDimension || targetHeight > maxDimension) {
     if (targetWidth >= targetHeight) {
@@ -110,7 +190,17 @@ export async function convertSourceToJpegBlob(
   ctx.fillRect(0, 0, targetWidth, targetHeight);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
+  ctx.drawImage(
+    source,
+    crop.sx,
+    crop.sy,
+    crop.sw,
+    crop.sh,
+    0,
+    0,
+    targetWidth,
+    targetHeight
+  );
 
   const dataUrl = canvas.toDataURL('image/jpeg', quality);
 

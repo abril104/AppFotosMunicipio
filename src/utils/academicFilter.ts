@@ -87,22 +87,30 @@ export function filterAndSortStudents(
 
 /**
  * Calcula las estadísticas de avance para un subconjunto o para el padrón completo.
+ * Las estudiantes con estado 'retirada' (trasladadas a otra I.E.) se contabilizan por separado
+ * y se descuentan del total activo para que la sección pueda alcanzar el 100% de avance real.
  */
 export function calculateProgressMetrics(students: Student[]): {
   total: number;
   photographed: number;
   pending: number;
+  retired: number;
   percentage: number;
 } {
   const total = students.length;
   if (total === 0) {
-    return { total: 0, photographed: 0, pending: 0, percentage: 0 };
+    return { total: 0, photographed: 0, pending: 0, retired: 0, percentage: 0 };
   }
-  const photographed = students.filter((s) => s.photo_status === 'completada' && Boolean(s.photo_path)).length;
-  const pending = total - photographed;
-  const percentage = Math.round((photographed / total) * 1000) / 10; // 1 decimal (ej. 85.4%)
+  const retired = students.filter((s) => s.photo_status === 'retirada').length;
+  const photographed = students.filter(
+    (s) => s.photo_status === 'completada' && Boolean(s.photo_path)
+  ).length;
+  const activeTotal = Math.max(0, total - retired);
+  const pending = Math.max(0, activeTotal - photographed);
+  const percentage =
+    activeTotal > 0 ? Math.round((photographed / activeTotal) * 1000) / 10 : 0;
 
-  return { total, photographed, pending, percentage };
+  return { total, photographed, pending, retired, percentage };
 }
 
 /**
@@ -112,13 +120,17 @@ export function calculateProgressMetrics(students: Student[]): {
 export function computeDashboardStats(students: Student[]): DashboardStats {
   const overall = calculateProgressMetrics(students);
 
-  const groupsMap = new Map<string, {
-    educationLevel: string;
-    grade: string;
-    section: string;
-    total: number;
-    completed: number;
-  }>();
+  const groupsMap = new Map<
+    string,
+    {
+      educationLevel: string;
+      grade: string;
+      section: string;
+      total: number;
+      completed: number;
+      retired: number;
+    }
+  >();
 
   for (const s of students) {
     const educationLevel = (s.education_level || 'Secundaria').trim();
@@ -131,11 +143,14 @@ export function computeDashboardStats(students: Student[]): DashboardStats {
       grade,
       section,
       total: 0,
-      completed: 0
+      completed: 0,
+      retired: 0
     };
 
     group.total += 1;
-    if (s.photo_status === 'completada' && s.photo_path) {
+    if (s.photo_status === 'retirada') {
+      group.retired += 1;
+    } else if (s.photo_status === 'completada' && s.photo_path) {
       group.completed += 1;
     }
     groupsMap.set(key, group);
@@ -143,8 +158,10 @@ export function computeDashboardStats(students: Student[]): DashboardStats {
 
   const byGradeSection: GradeSectionStats[] = Array.from(groupsMap.values())
     .map((g) => {
-      const pending = g.total - g.completed;
-      const percentage = g.total > 0 ? Math.round((g.completed / g.total) * 1000) / 10 : 0;
+      const activeTotal = Math.max(0, g.total - g.retired);
+      const pending = Math.max(0, activeTotal - g.completed);
+      const percentage =
+        activeTotal > 0 ? Math.round((g.completed / activeTotal) * 1000) / 10 : 0;
       return {
         educationLevel: g.educationLevel,
         grade: g.grade,
@@ -152,6 +169,7 @@ export function computeDashboardStats(students: Student[]): DashboardStats {
         total: g.total,
         completed: g.completed,
         pending,
+        retired: g.retired,
         percentage
       };
     })
@@ -176,6 +194,7 @@ export function computeDashboardStats(students: Student[]): DashboardStats {
     totalStudents: overall.total,
     completedPhotos: overall.photographed,
     pendingPhotos: overall.pending,
+    retiredStudents: overall.retired,
     overallPercentage: overall.percentage,
     byGradeSection,
     recentPhotos

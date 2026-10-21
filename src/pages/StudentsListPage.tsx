@@ -9,7 +9,9 @@ import {
   Filter,
   CheckCircle2,
   Clock,
-  Users
+  Users,
+  UserMinus,
+  UserCheck
 } from 'lucide-react';
 import type { Profile, Student } from '../types/database.ts';
 import type { AcademicFilters } from '../types/domain.ts';
@@ -31,6 +33,7 @@ interface StudentsListPageProps {
   onChangeFilters: (next: AcademicFilters) => void;
   onOpenCamera: (student: Student, currentFilteredList: Student[]) => void;
   onViewPhoto: (student: Student) => void;
+  onToggleRetiredStudent: (student: Student, markRetired: boolean) => Promise<void>;
   onDeleteStudent: (student: Student) => Promise<void>;
 }
 
@@ -41,11 +44,16 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
   onChangeFilters,
   onOpenCamera,
   onViewPhoto,
+  onToggleRetiredStudent,
   onDeleteStudent
 }) => {
   const [studentToReplaceConfirm, setStudentToReplaceConfirm] = useState<Student | null>(null);
+  const [studentToRetireConfirm, setStudentToRetireConfirm] = useState<{
+    student: Student;
+    markRetired: boolean;
+  } | null>(null);
   const [studentToDeleteConfirm, setStudentToDeleteConfirm] = useState<Student | null>(null);
-  const [deleting, setDeleting] = useState<boolean>(false);
+  const [processingAction, setProcessingAction] = useState<boolean>(false);
 
   // Filtros dependientes generados a partir del padrón importado
   const levels = useMemo(() => getAvailableLevels(students), [students]);
@@ -72,7 +80,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
     [academicScopedStudents]
   );
 
-  // Lista final aplicando también buscador por nombre/DNI y filtro todas/fotografiadas/pendientes
+  // Lista final aplicando también buscador por nombre/DNI y filtro todas/fotografiadas/pendientes/retiradas
   const filteredStudents = useMemo(
     () => filterAndSortStudents(students, filters),
     [students, filters]
@@ -95,16 +103,35 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
     });
   };
 
+  const handleConfirmRetireToggle = async () => {
+    if (!studentToRetireConfirm) return;
+    setProcessingAction(true);
+    try {
+      await onToggleRetiredStudent(
+        studentToRetireConfirm.student,
+        studentToRetireConfirm.markRetired
+      );
+    } finally {
+      setProcessingAction(false);
+      setStudentToRetireConfirm(null);
+    }
+  };
+
   const handleConfirmDelete = async () => {
     if (!studentToDeleteConfirm) return;
-    setDeleting(true);
+    setProcessingAction(true);
     try {
       await onDeleteStudent(studentToDeleteConfirm);
     } finally {
-      setDeleting(false);
+      setProcessingAction(false);
       setStudentToDeleteConfirm(null);
     }
   };
+
+  const activeCameraCandidates = useMemo(
+    () => filteredStudents.filter((s) => s.photo_status !== 'retirada'),
+    [filteredStudents]
+  );
 
   return (
     <div className="space-y-5">
@@ -115,25 +142,25 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
             Padrón de Estudiantes y Registro Fotográfico
           </h2>
           <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
-            Filtre por grado y sección, busque por nombre o DNI y capture fotografías en formato JPG
+            Filtre por grado y sección, busque por nombre o DNI, tome fotografías recortadas o marque estudiantes trasladadas como retiradas
           </p>
         </div>
 
-        {filteredStudents.length > 0 && (
+        {activeCameraCandidates.length > 0 && (
           <button
             type="button"
             onClick={() => {
               const firstPending =
-                filteredStudents.find((s) => s.photo_status === 'pendiente') ||
-                filteredStudents[0];
-              onOpenCamera(firstPending, filteredStudents);
+                activeCameraCandidates.find((s) => s.photo_status === 'pendiente') ||
+                activeCameraCandidates[0];
+              onOpenCamera(firstPending, activeCameraCandidates);
             }}
             className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold shadow-xs cursor-pointer"
           >
             <Camera className="w-4 h-4" />
             <span>
               Iniciar captura en lista actual (
-              {filteredStudents.filter((s) => s.photo_status === 'pendiente').length} pendientes)
+              {activeCameraCandidates.filter((s) => s.photo_status === 'pendiente').length} pendientes)
             </span>
           </button>
         )}
@@ -237,6 +264,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                 <option value="ALL">Ver todas</option>
                 <option value="pendiente">Solo pendientes</option>
                 <option value="completada">Solo fotografiadas</option>
+                <option value="retirada">Solo retiradas (trasladadas)</option>
               </select>
             </div>
           </div>
@@ -281,16 +309,22 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
           <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm">
             <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800">
               <Users className="w-4 h-4 text-slate-500" />
-              Total estudiantes: <strong>{sectionMetrics.total}</strong>
+              Total: <strong>{sectionMetrics.total}</strong>
             </span>
             <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              Total fotografiado: <strong>{sectionMetrics.photographed}</strong>
+              Fotografiadas: <strong>{sectionMetrics.photographed}</strong>
             </span>
             <span className="inline-flex items-center gap-1.5 font-semibold text-amber-700">
               <Clock className="w-4 h-4 text-amber-600" />
-              Total pendiente: <strong>{sectionMetrics.pending}</strong>
+              Pendientes: <strong>{sectionMetrics.pending}</strong>
             </span>
+            {sectionMetrics.retired > 0 && (
+              <span className="inline-flex items-center gap-1.5 font-semibold text-slate-600">
+                <UserMinus className="w-4 h-4 text-slate-500" />
+                Retiradas: <strong>{sectionMetrics.retired}</strong>
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3 min-w-[200px]">
@@ -334,6 +368,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {filteredStudents.map((student) => {
+                  const isRetired = student.photo_status === 'retirada';
                   const isCompleted =
                     student.photo_status === 'completada' && Boolean(student.photo_path);
 
@@ -341,7 +376,9 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                     <tr
                       key={student.id}
                       className={
-                        isCompleted
+                        isRetired
+                          ? 'bg-slate-100/70 text-slate-500 transition-colors'
+                          : isCompleted
                           ? 'bg-emerald-50/35 hover:bg-emerald-50/70 transition-colors'
                           : 'bg-white hover:bg-slate-50 transition-colors'
                       }
@@ -355,8 +392,17 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                           onClick={isCompleted ? () => onViewPhoto(student) : undefined}
                         />
                       </td>
-                      <td className="py-3 px-4 font-semibold text-slate-900">
+                      <td
+                        className={`py-3 px-4 font-semibold ${
+                          isRetired ? 'text-slate-500 line-through' : 'text-slate-900'
+                        }`}
+                      >
                         {student.full_name}
+                        {isRetired && (
+                          <span className="block text-[11px] font-normal text-slate-500 no-underline">
+                            Trasladada a otra I.E.
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-mono font-semibold text-slate-700">
                         {student.dni}
@@ -368,41 +414,82 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                       </td>
                       <td className="py-3 px-4">
                         <StatusBadge
-                          state={isCompleted ? 'guardada' : 'pendiente'}
+                          state={
+                            isRetired ? 'retirada' : isCompleted ? 'guardada' : 'pendiente'
+                          }
                           size="sm"
                         />
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="inline-flex items-center justify-end gap-2">
-                          {!isCompleted ? (
+                          {!isRetired && (
+                            <>
+                              {!isCompleted ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onOpenCamera(student, activeCameraCandidates)
+                                  }
+                                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs cursor-pointer"
+                                >
+                                  <Camera className="w-3.5 h-3.5" />
+                                  <span>Tomar fotografía</span>
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => onViewPhoto(student)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold cursor-pointer"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Ver fotografía</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setStudentToReplaceConfirm(student)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold cursor-pointer"
+                                    title="Repetir o reemplazar fotografía existente"
+                                  >
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                    <span>Reemplazar</span>
+                                  </button>
+                                </>
+                              )}
+                            </>
+                          )}
+
+                          {/* Botón para indicar que la estudiante fue trasladada a otra I.E. (Retirada) o reactivarla */}
+                          {!isRetired ? (
                             <button
                               type="button"
-                              onClick={() => onOpenCamera(student, filteredStudents)}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs cursor-pointer"
+                              onClick={() =>
+                                setStudentToRetireConfirm({
+                                  student,
+                                  markRetired: true
+                                })
+                              }
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-semibold cursor-pointer"
+                              title="Marcar estudiante como trasladada a otra I.E. (Retirada)"
                             >
-                              <Camera className="w-3.5 h-3.5" />
-                              <span>Tomar fotografía</span>
+                              <UserMinus className="w-3.5 h-3.5 text-slate-600" />
+                              <span>Retirada</span>
                             </button>
                           ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => onViewPhoto(student)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold cursor-pointer"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                <span>Ver fotografía</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setStudentToReplaceConfirm(student)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold cursor-pointer"
-                                title="Repetir o reemplazar fotografía existente"
-                              >
-                                <RefreshCw className="w-3.5 h-3.5" />
-                                <span>Reemplazar</span>
-                              </button>
-                            </>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setStudentToRetireConfirm({
+                                  student,
+                                  markRetired: false
+                                })
+                              }
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold cursor-pointer"
+                              title="Reactivar estudiante en el padrón"
+                            >
+                              <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Reactivar</span>
+                            </button>
                           )}
 
                           {profile.role === 'admin' && (
@@ -428,6 +515,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
           {/* VISTA DE TARJETAS PARA DISPOSITIVOS MÓVILES */}
           <div className="md:hidden space-y-3">
             {filteredStudents.map((student) => {
+              const isRetired = student.photo_status === 'retirada';
               const isCompleted =
                 student.photo_status === 'completada' && Boolean(student.photo_path);
 
@@ -435,7 +523,9 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                 <div
                   key={student.id}
                   className={`p-4 rounded-2xl border shadow-2xs ${
-                    isCompleted
+                    isRetired
+                      ? 'bg-slate-100 border-slate-300 opacity-80'
+                      : isCompleted
                       ? 'bg-emerald-50/40 border-emerald-200'
                       : 'bg-white border-slate-200'
                   }`}
@@ -450,11 +540,17 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-bold text-slate-900 leading-snug">
+                        <p
+                          className={`text-sm font-bold leading-snug ${
+                            isRetired ? 'text-slate-500 line-through' : 'text-slate-900'
+                          }`}
+                        >
                           {student.full_name}
                         </p>
                         <StatusBadge
-                          state={isCompleted ? 'guardada' : 'pendiente'}
+                          state={
+                            isRetired ? 'retirada' : isCompleted ? 'guardada' : 'pendiente'
+                          }
                           size="sm"
                         />
                       </div>
@@ -467,38 +563,80 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                           Grado {student.grade} - Sección "{student.section}"
                         </span>
                       </div>
+                      {isRetired && (
+                        <p className="text-[11px] text-slate-500 mt-1">
+                          Condición: Trasladada a otra I.E. (Retirada)
+                        </p>
+                      )}
                     </div>
                   </div>
 
-                  <div className="mt-3.5 pt-3 border-t border-slate-200/70 flex items-center gap-2">
-                    {!isCompleted ? (
+                  <div className="mt-3.5 pt-3 border-t border-slate-200/70 flex flex-wrap items-center gap-2">
+                    {!isRetired && (
+                      <>
+                        {!isCompleted ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onOpenCamera(student, activeCameraCandidates)
+                            }
+                            className="flex-1 py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-2xs"
+                          >
+                            <Camera className="w-4 h-4" />
+                            <span>Tomar fotografía</span>
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onViewPhoto(student)}
+                              className="flex-1 py-2 px-3 rounded-xl bg-white text-slate-700 border border-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5"
+                            >
+                              <Eye className="w-4 h-4" />
+                              <span>Ver foto</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setStudentToReplaceConfirm(student)}
+                              className="flex-1 py-2 px-3 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 text-xs font-semibold flex items-center justify-center gap-1.5"
+                            >
+                              <RefreshCw className="w-4 h-4" />
+                              <span>Reemplazar</span>
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )}
+
+                    {/* Botón móvil de Retirada / Reactivar */}
+                    {!isRetired ? (
                       <button
                         type="button"
-                        onClick={() => onOpenCamera(student, filteredStudents)}
-                        className="flex-1 py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-2xs"
+                        onClick={() =>
+                          setStudentToRetireConfirm({
+                            student,
+                            markRetired: true
+                          })
+                        }
+                        className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5"
                       >
-                        <Camera className="w-4 h-4" />
-                        <span>Tomar fotografía</span>
+                        <UserMinus className="w-4 h-4 text-slate-600" />
+                        <span>Retirada</span>
                       </button>
                     ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => onViewPhoto(student)}
-                          className="flex-1 py-2 px-3 rounded-xl bg-white text-slate-700 border border-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5"
-                        >
-                          <Eye className="w-4 h-4" />
-                          <span>Ver fotografía</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setStudentToReplaceConfirm(student)}
-                          className="flex-1 py-2 px-3 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 text-xs font-semibold flex items-center justify-center gap-1.5"
-                        >
-                          <RefreshCw className="w-4 h-4" />
-                          <span>Reemplazar</span>
-                        </button>
-                      </>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStudentToRetireConfirm({
+                            student,
+                            markRetired: false
+                          })
+                        }
+                        className="flex-1 py-2 px-3 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5"
+                      >
+                        <UserCheck className="w-4 h-4 text-emerald-600" />
+                        <span>Reactivar en el padrón</span>
+                      </button>
                     )}
 
                     {profile.role === 'admin' && (
@@ -535,10 +673,37 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
           if (studentToReplaceConfirm) {
             const target = studentToReplaceConfirm;
             setStudentToReplaceConfirm(null);
-            onOpenCamera(target, filteredStudents);
+            onOpenCamera(target, activeCameraCandidates);
           }
         }}
         onCancel={() => setStudentToReplaceConfirm(null)}
+      />
+
+      {/* Diálogo de confirmación para marcar como Retirada (trasladada a otra I.E.) o Reactivar */}
+      <ConfirmDialog
+        open={Boolean(studentToRetireConfirm)}
+        title={
+          studentToRetireConfirm?.markRetired
+            ? '¿Marcar estudiante como Retirada (trasladada)?'
+            : '¿Reactivar estudiante en el padrón?'
+        }
+        description={
+          studentToRetireConfirm
+            ? studentToRetireConfirm.markRetired
+              ? `Se asignará la etiqueta "Retirada" a ${studentToRetireConfirm.student.full_name} (DNI: ${studentToRetireConfirm.student.dni}) por traslado a otra institución educativa, y ya no figurará como fotografía pendiente.`
+              : `La estudiante ${studentToRetireConfirm.student.full_name} volverá a figurar activa en su sección.`
+            : ''
+        }
+        confirmLabel={
+          studentToRetireConfirm?.markRetired
+            ? 'Sí, marcar como Retirada'
+            : 'Sí, reactivar estudiante'
+        }
+        cancelLabel="Cancelar"
+        variant="warning"
+        isLoading={processingAction}
+        onConfirm={() => void handleConfirmRetireToggle()}
+        onCancel={() => setStudentToRetireConfirm(null)}
       />
 
       {/* Diálogo de confirmación antes de eliminar un registro del padrón */}
@@ -553,7 +718,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
         confirmLabel="Sí, eliminar registro"
         cancelLabel="Cancelar"
         variant="danger"
-        isLoading={deleting}
+        isLoading={processingAction}
         onConfirm={() => void handleConfirmDelete()}
         onCancel={() => setStudentToDeleteConfirm(null)}
       />
