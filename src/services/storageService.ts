@@ -1,6 +1,6 @@
 import { IS_SUPABASE_CONFIGURED, STORAGE_BUCKET_NAME, supabase } from './supabaseClient.ts';
 import type { Profile, Student } from '../types/database.ts';
-import { AppError, normalizeError } from '../utils/errorHandler.ts';
+import { AppError } from '../utils/errorHandler.ts';
 import { checkActionPermission } from '../utils/permissions.ts';
 import { buildDeterministicPhotoPath } from '../utils/photoProcessor.ts';
 import { updateDemoStudentRecord } from './studentService.ts';
@@ -99,9 +99,11 @@ export async function uploadAndRegisterStudentPhoto(
     }));
   }
 
+  const sb = supabase;
+
   // 1. Subir al bucket privado con soporte de reintento automático
   await withRetry(async () => {
-    const { error: uploadError } = await supabase.storage
+    const { error: uploadError } = await sb.storage
       .from(STORAGE_BUCKET_NAME)
       .upload(targetPhotoPath, jpegBlob, {
         contentType: 'image/jpeg',
@@ -122,7 +124,7 @@ export async function uploadAndRegisterStudentPhoto(
   signedUrlCache.delete(targetPhotoPath);
 
   // 2. Actualizar referencia, estado, fecha y autor en PostgreSQL
-  const { data: updatedRow, error: dbError } = await supabase
+  const { data: updatedRow, error: dbError } = await sb
     .from('students')
     .update({
       photo_path: targetPhotoPath,
@@ -138,7 +140,7 @@ export async function uploadAndRegisterStudentPhoto(
   if (dbError || !updatedRow) {
     // Si era la primera foto y la BD falló tras subir el archivo, intentar limpiar el archivo huérfano
     if (!isReplacement) {
-      await supabase.storage.from(STORAGE_BUCKET_NAME).remove([targetPhotoPath]).catch(() => {});
+      await sb.storage.from(STORAGE_BUCKET_NAME).remove([targetPhotoPath]).catch(() => {});
     }
     throw new AppError(
       'DATABASE_OPERATION_FAILED',
@@ -150,7 +152,7 @@ export async function uploadAndRegisterStudentPhoto(
   // 3. Si se reemplazó una foto cuya ruta anterior era distinta, eliminar la anterior de forma segura
   if (previousPhotoPath && previousPhotoPath !== targetPhotoPath) {
     signedUrlCache.delete(previousPhotoPath);
-    await supabase.storage
+    await sb.storage
       .from(STORAGE_BUCKET_NAME)
       .remove([previousPhotoPath])
       .catch(() => {
@@ -229,8 +231,9 @@ export async function downloadAuthorizedPhotoBlob(photoPath: string): Promise<Bl
     return demoBlob;
   }
 
+  const sb = supabase;
   return await withRetry(async () => {
-    const { data, error } = await supabase.storage
+    const { data, error } = await sb.storage
       .from(STORAGE_BUCKET_NAME)
       .download(photoPath);
 

@@ -1,5 +1,4 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Database } from '../types/database.ts';
 import { validateSupabaseEnvConfig } from '../utils/permissions.ts';
 
 export { validateSupabaseEnvConfig };
@@ -24,12 +23,10 @@ export const DEFAULT_JPEG_QUALITY = Number(
 );
 
 /**
- * Instancia tipada de Supabase Client.
- * Si Supabase no está configurado aún en `.env`, es `null` y el sistema informa
- * con total transparencia que se requiere configurar `.env` (o permite usar el entorno de demostración).
+ * Instancia de Supabase Client.
  */
-export const supabase: SupabaseClient<Database> | null = IS_SUPABASE_CONFIGURED
-  ? createClient<Database>(envUrl, envAnonKey, {
+export const supabase: SupabaseClient | null = IS_SUPABASE_CONFIGURED
+  ? createClient(envUrl, envAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,

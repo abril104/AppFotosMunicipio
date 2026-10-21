@@ -74,7 +74,8 @@ export function subscribeToStudentsChanges(onUpdate: () => void): () => void {
     };
   }
 
-  const channel = supabase
+  const sb = supabase;
+  const channel = sb
     .channel('students-realtime-sync')
     .on(
       'postgres_changes',
@@ -86,7 +87,7 @@ export function subscribeToStudentsChanges(onUpdate: () => void): () => void {
     .subscribe();
 
   return () => {
-    void supabase.removeChannel(channel);
+    void sb.removeChannel(channel);
   };
 }
 
@@ -250,7 +251,7 @@ export async function importValidatedExcelRows(
     .select('*')
     .single();
 
-  const batchRecord: ImportBatch = (batchData as ImportBatch) || {
+  const batchRecord: ImportBatch = (batchData as unknown as ImportBatch) || {
     id: crypto.randomUUID(),
     ...batchInsert,
     created_at: new Date().toISOString()
