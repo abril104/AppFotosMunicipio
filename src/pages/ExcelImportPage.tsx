@@ -23,6 +23,11 @@ import {
   computeImportSummary,
   validateAndAnalyzeRows
 } from '../utils/excelValidator.ts';
+import {
+  GRADE_DISPLAY_NAMES,
+  SECUNDARIA_GRADES,
+  getStandardSectionsForGrade
+} from '../utils/academicFilter.ts';
 import { importValidatedExcelRows } from '../services/studentService.ts';
 import { normalizeError } from '../utils/errorHandler.ts';
 import { useToast } from '../components/ui/ToastProvider.tsx';
@@ -57,6 +62,8 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
   const [parsedRows, setParsedRows] = useState<ParsedExcelRow[]>([]);
   const [filterView, setFilterView] = useState<'ALL' | 'ERRORS' | 'EXISTING'>('ALL');
   const [importing, setImporting] = useState<boolean>(false);
+  const [batchGrade, setBatchGrade] = useState<string>('1ro');
+  const [batchSection, setBatchSection] = useState<string>('A');
 
   const existingByDni = useMemo(() => {
     const map = new Map<string, Student>();
@@ -199,6 +206,26 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
       r.existingInDb ? { ...r, existingAction: action } : r
     );
     setParsedRows(validateAndAnalyzeRows(nextInput, existingByDni));
+  };
+
+  /**
+   * Permite asignar masivamente un Grado (1ro a 5to) y Sección (A-M / A-I) a todas las filas
+   * o a las filas que no tengan grado/sección especificados en el archivo Excel.
+   */
+  const handleApplyBatchGradeSection = (onlyMissing: boolean) => {
+    const nextInput = parsedRows.map((r) => ({
+      ...r,
+      grade: onlyMissing ? r.grade || batchGrade : batchGrade,
+      section: onlyMissing ? r.section || batchSection : batchSection
+    }));
+    setParsedRows(validateAndAnalyzeRows(nextInput, existingByDni));
+    showToast(
+      'info',
+      'Grado y sección asignados',
+      `Se aplicó ${batchGrade} "${batchSection}" ${
+        onlyMissing ? 'a las filas sin grado/sección' : 'a todas las filas cargadas'
+      }.`
+    );
   };
 
   /**
@@ -392,6 +419,66 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
                   </select>
                 </div>
               ))}
+            </div>
+
+            {/* Asignación rápida de Grado (1ro-5to) y Sección (A-M para 1ro, A-I para 2do-5to) */}
+            <div className="mt-4 pt-4 border-t border-slate-100 flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Grado Secundaria (1ro a 5to)
+                </label>
+                <select
+                  value={batchGrade}
+                  onChange={(e) => {
+                    const nextG = e.target.value;
+                    setBatchGrade(nextG);
+                    const allowedSecs = getStandardSectionsForGrade(nextG);
+                    if (!allowedSecs.includes(batchSection)) {
+                      setBatchSection(allowedSecs[0]);
+                    }
+                  }}
+                  className="px-3 py-1.5 text-xs sm:text-sm border border-slate-300 rounded-xl bg-slate-50 text-slate-900 font-semibold"
+                >
+                  {SECUNDARIA_GRADES.map((g) => (
+                    <option key={g} value={g}>
+                      {GRADE_DISPLAY_NAMES[g] || g}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Sección ({batchGrade === '1ro' ? 'A hasta M' : 'A hasta I'})
+                </label>
+                <select
+                  value={batchSection}
+                  onChange={(e) => setBatchSection(e.target.value)}
+                  className="px-3 py-1.5 text-xs sm:text-sm border border-slate-300 rounded-xl bg-slate-50 text-slate-900 font-semibold"
+                >
+                  {getStandardSectionsForGrade(batchGrade).map((sec) => (
+                    <option key={sec} value={sec}>
+                      Sección "{sec}"
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleApplyBatchGradeSection(true)}
+                className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold border border-slate-300 cursor-pointer"
+              >
+                Rellenar filas sin grado/sección con {batchGrade} "{batchSection}"
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleApplyBatchGradeSection(false)}
+                className="px-3.5 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-900 text-xs font-semibold border border-sky-200 cursor-pointer"
+              >
+                Asignar {batchGrade} "{batchSection}" a todo el archivo
+              </button>
             </div>
           </div>
 
@@ -625,36 +712,53 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
                         />
                       </td>
                       <td className="py-2.5 px-3">
-                        <input
-                          type="text"
+                        <select
                           value={row.grade}
                           disabled={row.excluded}
                           onChange={(e) =>
                             handleUpdateCell(row.rowIndex, 'grade', e.target.value)
                           }
-                          placeholder="1ro"
-                          className={`w-20 px-2.5 py-1.5 rounded-lg border ${
+                          className={`w-28 px-2 py-1.5 rounded-lg border font-semibold ${
                             row.issues.some((i) => i.field === 'grade' && i.isBlocking)
                               ? 'border-rose-400 bg-white text-rose-900'
                               : 'border-slate-300 bg-white text-slate-900'
                           }`}
-                        />
+                        >
+                          <option value="">-- Grado --</option>
+                          {SECUNDARIA_GRADES.map((g) => (
+                            <option key={g} value={g}>
+                              {g}
+                            </option>
+                          ))}
+                          {row.grade && !SECUNDARIA_GRADES.includes(row.grade as never) && (
+                            <option value={row.grade}>{row.grade}</option>
+                          )}
+                        </select>
                       </td>
                       <td className="py-2.5 px-3">
-                        <input
-                          type="text"
+                        <select
                           value={row.section}
                           disabled={row.excluded}
                           onChange={(e) =>
                             handleUpdateCell(row.rowIndex, 'section', e.target.value)
                           }
-                          placeholder="A"
-                          className={`w-16 px-2.5 py-1.5 rounded-lg border ${
+                          className={`w-20 px-2 py-1.5 rounded-lg border font-semibold ${
                             row.issues.some((i) => i.field === 'section' && i.isBlocking)
                               ? 'border-rose-400 bg-white text-rose-900'
                               : 'border-slate-300 bg-white text-slate-900'
                           }`}
-                        />
+                        >
+                          <option value="">-- Sec --</option>
+                          {getStandardSectionsForGrade(row.grade || '1ro').map((sec) => (
+                            <option key={sec} value={sec}>
+                              {sec}
+                            </option>
+                          ))}
+                          {row.section &&
+                            !getStandardSectionsForGrade(row.grade || '1ro').includes(
+                              row.section
+                            ) && <option value={row.section}>{row.section}</option>}
+                        </select>
                       </td>
                       <td className="py-2.5 px-3">
                         {row.excluded ? (

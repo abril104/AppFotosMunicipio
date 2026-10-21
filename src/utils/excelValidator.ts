@@ -124,6 +124,52 @@ export function sanitizeDniText(rawVal: unknown): string {
 }
 
 /**
+ * Normaliza el nombre del grado de Secundaria para unificar variaciones comunes de Excel
+ * ("1", "1°", "1ero", "Primero", "1ro" -> "1ro", etc. de Primero a Quinto).
+ */
+export function normalizeGradeLabel(rawVal: unknown): string {
+  const raw = String(rawVal ?? '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+
+  const lower = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  if (/^(1|1ro|1er|1ero|1°|1º|primero|primer(\s+grado)?)$/.test(lower) || lower.startsWith('1ro') || lower.startsWith('1°') || lower.startsWith('primero')) {
+    return '1ro';
+  }
+  if (/^(2|2do|2°|2º|segundo|segundo(\s+grado)?)$/.test(lower) || lower.startsWith('2do') || lower.startsWith('2°') || lower.startsWith('segundo')) {
+    return '2do';
+  }
+  if (/^(3|3ro|3er|3ero|3°|3º|tercero|tercer(\s+grado)?)$/.test(lower) || lower.startsWith('3ro') || lower.startsWith('3°') || lower.startsWith('tercero')) {
+    return '3ro';
+  }
+  if (/^(4|4to|4°|4º|cuarto|cuarto(\s+grado)?)$/.test(lower) || lower.startsWith('4to') || lower.startsWith('4°') || lower.startsWith('cuarto')) {
+    return '4to';
+  }
+  if (/^(5|5to|5°|5º|quinto|quinto(\s+grado)?)$/.test(lower) || lower.startsWith('5to') || lower.startsWith('5°') || lower.startsWith('quinto')) {
+    return '5to';
+  }
+
+  return raw;
+}
+
+/**
+ * Normaliza la letra de sección ("Sección A", "sec. b", "a" -> "A").
+ */
+export function normalizeSectionLabel(rawVal: unknown): string {
+  const raw = String(rawVal ?? '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  const cleaned = raw
+    .replace(/^(seccion|sección|sec\.?|aula)\s*/i, '')
+    .replace(/["']/g, '')
+    .trim()
+    .toUpperCase();
+  return cleaned || raw.toUpperCase();
+}
+
+/**
  * Valida que un DNI peruano tenga exactamente 8 dígitos numéricos como texto.
  */
 export function isValidPeruvianDni(dni: string): boolean {
@@ -158,8 +204,8 @@ export function validateAndAnalyzeRows(
     const dni = sanitizeDniText(row.dni);
     const full_name = String(row.full_name ?? '').replace(/\s+/g, ' ').trim();
     const education_level = String(row.education_level ?? '').replace(/\s+/g, ' ').trim() || 'Secundaria';
-    const grade = String(row.grade ?? '').replace(/\s+/g, ' ').trim();
-    const section = String(row.section ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const grade = normalizeGradeLabel(row.grade);
+    const section = normalizeSectionLabel(row.section);
     const excluded = Boolean(row.excluded);
 
     if (!excluded && dni.length > 0) {

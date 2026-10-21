@@ -11,16 +11,21 @@ import {
   Clock,
   Users,
   UserMinus,
-  UserCheck
+  UserCheck,
+  UserPlus,
+  X
 } from 'lucide-react';
 import type { Profile, Student } from '../types/database.ts';
 import type { AcademicFilters } from '../types/domain.ts';
 import {
+  GRADE_DISPLAY_NAMES,
+  SECUNDARIA_GRADES,
   calculateProgressMetrics,
   filterAndSortStudents,
   getAvailableGrades,
   getAvailableLevels,
-  getAvailableSections
+  getAvailableSections,
+  getStandardSectionsForGrade
 } from '../utils/academicFilter.ts';
 import { StudentAvatar } from '../components/ui/StudentAvatar.tsx';
 import { StatusBadge } from '../components/ui/Badge.tsx';
@@ -34,6 +39,12 @@ interface StudentsListPageProps {
   onOpenCamera: (student: Student, currentFilteredList: Student[]) => void;
   onViewPhoto: (student: Student) => void;
   onToggleRetiredStudent: (student: Student, markRetired: boolean) => Promise<void>;
+  onCreateStudent: (input: {
+    dni: string;
+    full_name: string;
+    grade: string;
+    section: string;
+  }) => Promise<void>;
   onDeleteStudent: (student: Student) => Promise<void>;
 }
 
@@ -45,6 +56,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
   onOpenCamera,
   onViewPhoto,
   onToggleRetiredStudent,
+  onCreateStudent,
   onDeleteStudent
 }) => {
   const [studentToReplaceConfirm, setStudentToReplaceConfirm] = useState<Student | null>(null);
@@ -54,6 +66,18 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
   } | null>(null);
   const [studentToDeleteConfirm, setStudentToDeleteConfirm] = useState<Student | null>(null);
   const [processingAction, setProcessingAction] = useState<boolean>(false);
+
+  // Estado del modal para agregar una estudiante individualmente en su grado (1ro-5to) y sección (A-M / A-I)
+  const [addStudentModalOpen, setAddStudentModalOpen] = useState<boolean>(false);
+  const [newDni, setNewDni] = useState<string>('');
+  const [newFullName, setNewFullName] = useState<string>('');
+  const [newGrade, setNewGrade] = useState<string>(
+    filters.grade !== 'ALL' ? filters.grade : '1ro'
+  );
+  const [newSection, setNewSection] = useState<string>(
+    filters.section !== 'ALL' ? filters.section : 'A'
+  );
+  const [creatingStudent, setCreatingStudent] = useState<boolean>(false);
 
   // Filtros dependientes generados a partir del padrón importado
   const levels = useMemo(() => getAvailableLevels(students), [students]);
@@ -128,6 +152,37 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
     }
   };
 
+  const handleOpenAddModal = () => {
+    const defaultG = filters.grade !== 'ALL' ? filters.grade : '1ro';
+    const allowedSecs = getStandardSectionsForGrade(defaultG);
+    const defaultSec =
+      filters.section !== 'ALL' && allowedSecs.includes(filters.section)
+        ? filters.section
+        : allowedSecs[0];
+
+    setNewDni('');
+    setNewFullName('');
+    setNewGrade(defaultG);
+    setNewSection(defaultSec);
+    setAddStudentModalOpen(true);
+  };
+
+  const handleCreateStudentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreatingStudent(true);
+    try {
+      await onCreateStudent({
+        dni: newDni,
+        full_name: newFullName,
+        grade: newGrade,
+        section: newSection
+      });
+      setAddStudentModalOpen(false);
+    } finally {
+      setCreatingStudent(false);
+    }
+  };
+
   const activeCameraCandidates = useMemo(
     () => filteredStudents.filter((s) => s.photo_status !== 'retirada'),
     [filteredStudents]
@@ -146,24 +201,35 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
           </p>
         </div>
 
-        {activeCameraCandidates.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => {
-              const firstPending =
-                activeCameraCandidates.find((s) => s.photo_status === 'pendiente') ||
-                activeCameraCandidates[0];
-              onOpenCamera(firstPending, activeCameraCandidates);
-            }}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold shadow-xs cursor-pointer"
+            onClick={handleOpenAddModal}
+            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 text-xs sm:text-sm font-semibold shadow-2xs cursor-pointer"
           >
-            <Camera className="w-4 h-4" />
-            <span>
-              Iniciar captura en lista actual (
-              {activeCameraCandidates.filter((s) => s.photo_status === 'pendiente').length} pendientes)
-            </span>
+            <UserPlus className="w-4 h-4 text-sky-600" />
+            <span>Agregar estudiante</span>
           </button>
-        )}
+
+          {activeCameraCandidates.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                const firstPending =
+                  activeCameraCandidates.find((s) => s.photo_status === 'pendiente') ||
+                  activeCameraCandidates[0];
+                onOpenCamera(firstPending, activeCameraCandidates);
+              }}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold shadow-xs cursor-pointer"
+            >
+              <Camera className="w-4 h-4" />
+              <span>
+                Iniciar captura en lista actual (
+                {activeCameraCandidates.filter((s) => s.photo_status === 'pendiente').length} pendientes)
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Panel de Filtros Académicos Dependientes y Buscador */}
@@ -206,10 +272,10 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
               onChange={(e) => handleGradeChange(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
             >
-              <option value="ALL">Todos los grados</option>
+              <option value="ALL">Todos los grados (1ro a 5to)</option>
               {grades.map((g) => (
                 <option key={g} value={g}>
-                  {g}
+                  {GRADE_DISPLAY_NAMES[g] || g}
                 </option>
               ))}
             </select>
@@ -722,6 +788,126 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
         onConfirm={() => void handleConfirmDelete()}
         onCancel={() => setStudentToDeleteConfirm(null)}
       />
+
+      {/* Modal para registrar una estudiante manualmente con Grados 1ro-5to y Secciones A-M / A-I */}
+      {addStudentModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 bg-slate-900 text-white">
+              <div className="flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-sky-400" />
+                <h3 className="text-sm sm:text-base font-bold">
+                  Agregar Estudiante de Secundaria
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddStudentModalOpen(false)}
+                className="p-1 text-slate-300 hover:text-white rounded-lg"
+                aria-label="Cerrar"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateStudentSubmit} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Número de DNI (8 dígitos) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={8}
+                  value={newDni}
+                  onChange={(e) => setNewDni(e.target.value.replace(/\D/g, ''))}
+                  placeholder="Ej. 01234567"
+                  className="w-full px-3.5 py-2 text-sm font-mono font-bold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Apellidos y Nombres Completos *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newFullName}
+                  onChange={(e) => setNewFullName(e.target.value)}
+                  placeholder="APELLIDOS, NOMBRES"
+                  className="w-full px-3.5 py-2 text-sm uppercase border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Grado (1ro a 5to) *
+                  </label>
+                  <select
+                    value={newGrade}
+                    onChange={(e) => {
+                      const g = e.target.value;
+                      setNewGrade(g);
+                      const allowedSecs = getStandardSectionsForGrade(g);
+                      if (!allowedSecs.includes(newSection)) {
+                        setNewSection(allowedSecs[0]);
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold"
+                  >
+                    {SECUNDARIA_GRADES.map((g) => (
+                      <option key={g} value={g}>
+                        {GRADE_DISPLAY_NAMES[g] || g}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Sección ({newGrade === '1ro' ? 'A - M' : 'A - I'}) *
+                  </label>
+                  <select
+                    value={newSection}
+                    onChange={(e) => setNewSection(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold"
+                  >
+                    {getStandardSectionsForGrade(newGrade).map((sec) => (
+                      <option key={sec} value={sec}>
+                        Sección "{sec}"
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setAddStudentModalOpen(false)}
+                  disabled={creatingStudent}
+                  className="px-4 py-2 text-xs sm:text-sm font-medium text-slate-700 border border-slate-300 rounded-xl hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingStudent}
+                  className="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-xl cursor-pointer disabled:opacity-50"
+                >
+                  {creatingStudent ? 'Guardando...' : 'Guardar estudiante'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -14,6 +14,7 @@ import {
   signOutSession
 } from './services/authService.ts';
 import {
+  createSingleStudentRecord,
   deleteStudentRecord,
   fetchImportBatches,
   fetchStudents,
@@ -132,6 +133,31 @@ const AuthenticatedWorkspace: React.FC<{
     }
   };
 
+  const handleCreateStudent = async (input: {
+    dni: string;
+    full_name: string;
+    grade: string;
+    section: string;
+  }) => {
+    try {
+      const created = await createSingleStudentRecord(profile, input);
+      setStudents((prev) =>
+        [...prev, created].sort((a, b) =>
+          a.full_name.localeCompare(b.full_name, 'es', { sensitivity: 'base' })
+        )
+      );
+      showToast(
+        'success',
+        'Estudiante registrada',
+        `Se agregó a ${created.full_name} en ${created.grade} "${created.section}".`
+      );
+    } catch (err) {
+      const normalized = normalizeError(err);
+      showToast('error', 'No se pudo registrar', normalized.userMessage);
+      throw err;
+    }
+  };
+
   const handleToggleRetiredStudent = async (
     student: Student,
     markRetired: boolean
@@ -211,6 +237,7 @@ const AuthenticatedWorkspace: React.FC<{
               onOpenCamera={handleOpenCamera}
               onViewPhoto={(s) => setViewerStudent(s)}
               onToggleRetiredStudent={handleToggleRetiredStudent}
+              onCreateStudent={handleCreateStudent}
               onDeleteStudent={handleDeleteStudent}
             />
           }

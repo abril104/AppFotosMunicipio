@@ -8,6 +8,7 @@ import {
   computeImportSummary,
   isScientificNotation,
   isValidPeruvianDni,
+  normalizeGradeLabel,
   sanitizeDniText,
   validateAndAnalyzeRows
 } from '../src/utils/excelValidator.ts';
@@ -154,12 +155,18 @@ describe('Fase 4: Organización Académica, Filtros y Estadísticas', () => {
     }
   ];
 
-  it('genera filtros dependientes de grado y sección y ordena alfabéticamente', () => {
+  it('genera filtros dependientes de grado (1ro a 5to) y secciones (A-M en 1ro, A-I en 2do-5to) y ordena alfabéticamente', () => {
     const grades = getAvailableGrades(sampleRoster, 'Secundaria');
-    assert.deepEqual(grades, ['1ro', '2do']);
+    assert.deepEqual(grades, ['1ro', '2do', '3ro', '4to', '5to']);
 
     const sections1ro = getAvailableSections(sampleRoster, '1ro', 'Secundaria');
-    assert.deepEqual(sections1ro, ['A']);
+    assert.deepEqual(sections1ro, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M']);
+
+    const sections2do = getAvailableSections(sampleRoster, '2do', 'Secundaria');
+    assert.deepEqual(sections2do, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']);
+
+    assert.equal(normalizeGradeLabel('Primero'), '1ro');
+    assert.equal(normalizeGradeLabel('5°'), '5to');
 
     const filtered1roA = filterAndSortStudents(sampleRoster, {
       educationLevel: 'Secundaria',

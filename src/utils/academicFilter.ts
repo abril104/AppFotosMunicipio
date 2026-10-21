@@ -2,10 +2,47 @@ import type { Student } from '../types/database.ts';
 import type { AcademicFilters, DashboardStats, GradeSectionStats } from '../types/domain.ts';
 
 /**
+ * Catálogo oficial institucional para Secundaria:
+ * - Grados: 1ro (Primero) a 5to (Quinto)
+ * - Secciones de 1er grado (1ro): A hasta M (13 secciones)
+ * - Secciones de 2do a 5to grado: A hasta I (9 secciones)
+ */
+export const SECUNDARIA_GRADES = ['1ro', '2do', '3ro', '4to', '5to'] as const;
+
+export const SECTIONS_1RO = [
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'
+] as const;
+
+export const SECTIONS_2DO_TO_5TO = [
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'
+] as const;
+
+export const GRADE_DISPLAY_NAMES: Record<string, string> = {
+  '1ro': '1ro (Primero)',
+  '2do': '2do (Segundo)',
+  '3ro': '3ro (Tercero)',
+  '4to': '4to (Cuarto)',
+  '5to': '5to (Quinto)'
+};
+
+/**
+ * Devuelve las secciones oficiales permitidas según el grado seleccionado.
+ * - Para 1ro (o Todos): A hasta M
+ * - Para 2do, 3ro, 4to y 5to: A hasta I
+ */
+export function getStandardSectionsForGrade(grade: string): string[] {
+  const clean = grade.trim();
+  if (clean === '1ro' || clean === 'ALL' || !clean) {
+    return [...SECTIONS_1RO];
+  }
+  return [...SECTIONS_2DO_TO_5TO];
+}
+
+/**
  * Obtiene la lista ordenada de niveles educativos disponibles en el padrón.
  */
 export function getAvailableLevels(students: Student[]): string[] {
-  const set = new Set<string>();
+  const set = new Set<string>(['Secundaria']);
   for (const s of students) {
     const lvl = (s.education_level || 'Secundaria').trim();
     if (lvl) set.add(lvl);
@@ -14,10 +51,10 @@ export function getAvailableLevels(students: Student[]): string[] {
 }
 
 /**
- * Obtiene la lista ordenada de grados dependientes del nivel educativo seleccionado.
+ * Obtiene la lista ordenada de grados (1ro a 5to de Secundaria más cualquier otro importado).
  */
 export function getAvailableGrades(students: Student[], educationLevel = 'ALL'): string[] {
-  const set = new Set<string>();
+  const set = new Set<string>(SECUNDARIA_GRADES);
   for (const s of students) {
     const lvl = (s.education_level || 'Secundaria').trim();
     if (educationLevel !== 'ALL' && lvl !== educationLevel) continue;
@@ -29,14 +66,18 @@ export function getAvailableGrades(students: Student[], educationLevel = 'ALL'):
 }
 
 /**
- * Obtiene la lista ordenada de secciones dependientes del nivel y grado seleccionados.
+ * Obtiene la lista ordenada de secciones dependientes del grado seleccionado:
+ * - Si el grado es 1ro (o ALL): incluye de la A a la M.
+ * - Si el grado es 2do, 3ro, 4to o 5to: incluye de la A a la I (más cualquier sección adicional existente en BD para ese grado).
  */
 export function getAvailableSections(
   students: Student[],
   grade = 'ALL',
   educationLevel = 'ALL'
 ): string[] {
-  const set = new Set<string>();
+  const standard = getStandardSectionsForGrade(grade);
+  const set = new Set<string>(standard);
+
   for (const s of students) {
     const lvl = (s.education_level || 'Secundaria').trim();
     if (educationLevel !== 'ALL' && lvl !== educationLevel) continue;

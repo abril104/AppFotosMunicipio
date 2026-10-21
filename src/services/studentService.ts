@@ -6,7 +6,11 @@ import { AppError, normalizeError } from '../utils/errorHandler.ts';
 import { checkActionPermission } from '../utils/permissions.ts';
 import {
   applyControlledRosterUpsert,
-  computeImportSummary
+  computeImportSummary,
+  isValidPeruvianDni,
+  normalizeGradeLabel,
+  normalizeSectionLabel,
+  sanitizeDniText
 } from '../utils/excelValidator.ts';
 
 // Almacenamiento en memoria para modo demostración (nunca usa localStorage ni IndexedDB para fotos)
@@ -349,6 +353,107 @@ export async function toggleStudentRetiredStatus(
       );
     }
     throw normalizeError(error, 'No se pudo actualizar la condición de la estudiante.');
+  }
+
+  return data as Student;
+}
+
+/**
+ * Registra o actualiza individualmente a una estudiante en el padrón
+ * (útil cuando una alumna no figuraba en el Excel inicial durante la jornada fotográfica).
+ */
+export async function createSingleStudentRecord(
+  currentProfile: Profile,
+  input: {
+    dni: string;
+    full_name: string;
+    grade: string;
+    section: string;
+    education_level?: string;
+  }
+): Promise<Student> {
+  const perm = checkActionPermission(
+    { userId: currentProfile.id, role: currentProfile.role, isActive: currentProfile.is_active },
+    'CAPTURE_PHOTO'
+  );
+  if (!perm.allowed) {
+    throw new AppError('AUTH_FORBIDDEN_ROLE', perm.reason || 'Permiso denegado.', false);
+  }
+
+  const dni = sanitizeDniText(input.dni);
+  const full_name = String(input.full_name || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const grade = normalizeGradeLabel(input.grade);
+  const section = normalizeSectionLabel(input.section);
+  const education_level = String(input.education_level || 'Secundaria').trim() || 'Secundaria';
+
+  if (!isValidPeruvianDni(dni)) {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      'El DNI debe tener exactamente 8 dígitos numéricos (incluyendo ceros iniciales).',
+      false
+    );
+  }
+  if (full_name.length < 3) {
+    throw new AppError('VALIDATION_ERROR', 'Ingrese los apellidos y nombres completos de la estudiante.', false);
+  }
+  if (!grade || !section) {
+    throw new AppError('VALIDATION_ERROR', 'Seleccione el grado (1ro a 5to) y la sección.', false);
+  }
+
+  const nowIso = new Date().toISOString();
+
+  if (!IS_SUPABASE_CONFIGURED || !supabase) {
+    const existing = demoStudentsStore.find((s) => s.dni === dni);
+    if (existing) {
+      throw new AppError(
+        'VALIDATION_ERROR',
+        `Ya existe una estudiante registrada con el DNI ${dni} (${existing.full_name} - ${existing.grade} "${existing.section}").`,
+        false
+      );
+    }
+    const created: Student = {
+      id: crypto.randomUUID(),
+      dni,
+      full_name,
+      education_level,
+      grade,
+      section,
+      photo_path: null,
+      photo_status: 'pendiente',
+      photo_updated_at: null,
+      photo_updated_by: null,
+      created_at: nowIso,
+      updated_at: nowIso
+    };
+    demoStudentsStore.push(created);
+    notifyDemoListeners();
+    return created;
+  }
+
+  const { data, error } = await supabase
+    .from('students')
+    .insert({
+      dni,
+      full_name,
+      education_level,
+      grade,
+      section,
+      photo_status: 'pendiente',
+      photo_path: null
+    })
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    const msg = String(error?.message || '').toLowerCase();
+    if (msg.includes('uq_students_dni') || msg.includes('duplicate key')) {
+      throw new AppError(
+        'VALIDATION_ERROR',
+        `El DNI ${dni} ya se encuentra registrado en el padrón institucional.`,
+        false
+      );
+    }
+    throw normalizeError(error, 'No se pudo registrar a la estudiante en la base de datos.');
   }
 
   return data as Student;
