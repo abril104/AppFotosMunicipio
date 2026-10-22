@@ -1,8 +1,17 @@
-import { IS_SUPABASE_CONFIGURED, supabase } from './supabaseClient.ts';
-import type { Profile, UserRole } from '../types/database.ts';
+import {
+  IS_SUPABASE_CONFIGURED,
+  createIsolatedAuthClient,
+  supabase
+} from './supabaseClient.ts';
+import type {
+  Profile,
+  UserEducationLevelScope,
+  UserRole
+} from '../types/database.ts';
 import { DEMO_PROFILES } from '../data/demoStudents.ts';
 import { AppError, normalizeError } from '../utils/errorHandler.ts';
 import { checkActionPermission } from '../utils/permissions.ts';
+import { getUserEffectiveLevelScope } from '../utils/academicFilter.ts';
 
 // Estado en memoria de sesión para modo demostración local (nunca persiste contraseñas ni imágenes en localStorage)
 let demoActiveProfile: Profile | null = null;
@@ -140,7 +149,11 @@ async function fetchUserProfileById(userId: string, fallbackEmail: string): Prom
     );
   }
 
-  return data as Profile;
+  const profile = data as Profile;
+  return {
+    ...profile,
+    assigned_level: getUserEffectiveLevelScope(profile)
+  };
 }
 
 /**
@@ -156,7 +169,10 @@ export async function listAuthorizedProfiles(currentProfile: Profile): Promise<P
   }
 
   if (!IS_SUPABASE_CONFIGURED || !supabase) {
-    return [...demoProfilesStore];
+    return demoProfilesStore.map((p) => ({
+      ...p,
+      assigned_level: getUserEffectiveLevelScope(p)
+    }));
   }
 
   const { data, error } = await supabase
@@ -168,16 +184,170 @@ export async function listAuthorizedProfiles(currentProfile: Profile): Promise<P
     throw normalizeError(error, 'Error al consultar la lista de usuarios autorizados.');
   }
 
-  return (data || []) as Profile[];
+  return ((data || []) as Profile[]).map((p) => ({
+    ...p,
+    assigned_level: getUserEffectiveLevelScope(p)
+  }));
 }
 
 /**
- * Permite a un administrador cambiar el rol ('admin' | 'operator'), nombre o estado activo de un usuario.
+ * Permite a un administrador crear una nueva cuenta de usuario (con rol y nivel Primaria/Secundaria/Todos)
+ * directamente desde la aplicación web sin cerrar su propia sesión.
+ */
+export async function createAuthorizedUserAccount(
+  adminProfile: Profile,
+  input: {
+    email: string;
+    password: string;
+    full_name: string;
+    role: UserRole;
+    assigned_level: UserEducationLevelScope;
+  }
+): Promise<{ profile: Profile; requiresEmailConfirmSQL: boolean }> {
+  const perm = checkActionPermission(
+    { userId: adminProfile.id, role: adminProfile.role, isActive: adminProfile.is_active },
+    'MANAGE_USERS'
+  );
+  if (!perm.allowed) {
+    throw new AppError('AUTH_FORBIDDEN_ROLE', perm.reason || 'Permiso denegado.', false);
+  }
+
+  const cleanEmail = input.email.trim().toLowerCase();
+  const cleanName = input.full_name.trim();
+  const password = input.password;
+
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    throw new AppError('VALIDATION_ERROR', 'Ingrese un correo electrónico válido.', false);
+  }
+  if (password.length < 6) {
+    throw new AppError('VALIDATION_ERROR', 'La contraseña debe tener al menos 6 caracteres.', false);
+  }
+  if (cleanName.length < 2) {
+    throw new AppError('VALIDATION_ERROR', 'Ingrese el nombre completo o cargo del usuario.', false);
+  }
+
+  if (!IS_SUPABASE_CONFIGURED || !supabase) {
+    if (demoProfilesStore.some((p) => p.email.toLowerCase() === cleanEmail)) {
+      throw new AppError('VALIDATION_ERROR', 'Ya existe un usuario con ese correo.', false);
+    }
+    const created: Profile = {
+      id: crypto.randomUUID(),
+      email: cleanEmail,
+      full_name: cleanName,
+      role: input.role,
+      assigned_level: input.assigned_level,
+      is_active: true,
+      created_at: new Date().toISOString()
+    };
+    demoProfilesStore.push(created);
+    return { profile: created, requiresEmailConfirmSQL: false };
+  }
+
+  // 1. Intentar creación directa con correo ya confirmado mediante la función RPC de la migración 005
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'admin_create_user_account',
+    {
+      p_email: cleanEmail,
+      p_password: password,
+      p_full_name: cleanName,
+      p_role: input.role,
+      p_assigned_level: input.assigned_level
+    }
+  );
+
+  if (!rpcError && rpcData) {
+    const row = rpcData as {
+      id: string;
+      email: string;
+      full_name: string;
+      role: UserRole;
+      assigned_level: UserEducationLevelScope;
+      is_active: boolean;
+    };
+    return {
+      profile: {
+        id: row.id,
+        email: row.email,
+        full_name: row.full_name,
+        role: row.role,
+        assigned_level: row.assigned_level,
+        is_active: row.is_active,
+        created_at: new Date().toISOString()
+      },
+      requiresEmailConfirmSQL: false
+    };
+  }
+
+  // Si el error es de negocio (ej. correo duplicado), propagarlo
+  if (rpcError && String(rpcError.message || '').includes('Ya existe una cuenta')) {
+    throw new AppError('VALIDATION_ERROR', rpcError.message, false);
+  }
+
+  // 2. Respaldo mediante cliente aislado (si aún no se corrió la migración 005 en SQL Editor)
+  const isolatedClient = createIsolatedAuthClient();
+  if (!isolatedClient) {
+    throw new AppError('AUTH_UNAUTHORIZED', 'Cliente de Supabase no disponible.', false);
+  }
+
+  const { data: signUpData, error: signUpError } = await isolatedClient.auth.signUp({
+    email: cleanEmail,
+    password,
+    options: {
+      data: {
+        full_name: cleanName,
+        role: input.role,
+        assigned_level: input.assigned_level
+      }
+    }
+  });
+
+  if (signUpError || !signUpData.user) {
+    throw normalizeError(signUpError, 'No se pudo registrar la nueva cuenta de usuario.');
+  }
+
+  // Asegurar rol y nivel en public.profiles
+  const { data: updatedProfile } = await supabase
+    .from('profiles')
+    .update({
+      full_name: cleanName,
+      role: input.role,
+      assigned_level: input.assigned_level,
+      is_active: true,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', signUpData.user.id)
+    .select('*')
+    .single();
+
+  const finalProfile: Profile = (updatedProfile as Profile) || {
+    id: signUpData.user.id,
+    email: cleanEmail,
+    full_name: cleanName,
+    role: input.role,
+    assigned_level: input.assigned_level,
+    is_active: true,
+    created_at: new Date().toISOString()
+  };
+
+  return {
+    profile: finalProfile,
+    requiresEmailConfirmSQL: !signUpData.user.email_confirmed_at
+  };
+}
+
+/**
+ * Permite a un administrador cambiar el rol ('admin' | 'operator'), nivel ('ALL' | 'Primaria' | 'Secundaria'),
+ * nombre o estado activo de un usuario.
  */
 export async function updateAuthorizedUserProfile(
   adminProfile: Profile,
   targetUserId: string,
-  updates: { role?: UserRole; is_active?: boolean; full_name?: string }
+  updates: {
+    role?: UserRole;
+    assigned_level?: UserEducationLevelScope;
+    is_active?: boolean;
+    full_name?: string;
+  }
 ): Promise<Profile> {
   const perm = checkActionPermission(
     { userId: adminProfile.id, role: adminProfile.role, isActive: adminProfile.is_active },

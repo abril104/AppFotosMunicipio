@@ -1,13 +1,13 @@
-import type { Student } from '../types/database.ts';
+import type { Profile, Student, UserEducationLevelScope } from '../types/database.ts';
 import type { AcademicFilters, DashboardStats, GradeSectionStats } from '../types/domain.ts';
 
 /**
- * Catálogo oficial institucional para Secundaria:
- * - Grados: 1ro (Primero) a 5to (Quinto)
- * - Secciones de 1er grado (1ro): A hasta M (13 secciones)
- * - Secciones de 2do a 5to grado: A hasta I (9 secciones)
+ * Catálogo oficial institucional:
+ * - Secundaria: 1ro (Primero) a 5to (Quinto). Secciones A-M en 1ro y A-I en 2do-5to.
+ * - Primaria: 1ro (Primero) a 6to (Sexto). Secciones A-I (y hasta M si existe).
  */
 export const SECUNDARIA_GRADES = ['1ro', '2do', '3ro', '4to', '5to'] as const;
+export const PRIMARIA_GRADES = ['1ro', '2do', '3ro', '4to', '5to', '6to'] as const;
 
 export const SECTIONS_1RO = [
   'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'
@@ -22,13 +22,64 @@ export const GRADE_DISPLAY_NAMES: Record<string, string> = {
   '2do': '2do (Segundo)',
   '3ro': '3ro (Tercero)',
   '4to': '4to (Cuarto)',
-  '5to': '5to (Quinto)'
+  '5to': '5to (Quinto)',
+  '6to': '6to (Sexto)'
 };
+
+/**
+ * Obtiene el alcance de nivel educativo asignado al usuario ('ALL' | 'Primaria' | 'Secundaria').
+ */
+export function getUserEffectiveLevelScope(
+  profile: Pick<Profile, 'assigned_level' | 'email'> | null | undefined
+): UserEducationLevelScope {
+  if (!profile) return 'ALL';
+  if (profile.assigned_level === 'Primaria' || profile.assigned_level === 'Secundaria') {
+    return profile.assigned_level;
+  }
+  // Respaldo automático por correo si aún no se ejecutó la migración 005 en la BD
+  const emailLower = (profile.email || '').toLowerCase();
+  if (emailLower.startsWith('secundaria@') || emailLower.includes('.secundaria@')) {
+    return 'Secundaria';
+  }
+  if (emailLower.startsWith('primaria@') || emailLower.includes('.primaria@')) {
+    return 'Primaria';
+  }
+  return 'ALL';
+}
+
+/**
+ * Filtra la lista global de estudiantes según el nivel asignado al usuario:
+ * - Si el usuario es de 'Secundaria', solo ve estudiantes e información de Secundaria.
+ * - Si el usuario es de 'Primaria', solo ve estudiantes e información de Primaria.
+ * - Si el usuario tiene 'ALL', ve toda la institución.
+ */
+export function filterStudentsByUserScope(
+  students: Student[],
+  profile: Pick<Profile, 'assigned_level' | 'email'> | null | undefined
+): Student[] {
+  const scope = getUserEffectiveLevelScope(profile);
+  if (scope === 'ALL') return students;
+
+  return students.filter((s) => {
+    const studentLevel = (s.education_level || 'Secundaria').trim().toLowerCase();
+    return studentLevel === scope.toLowerCase();
+  });
+}
+
+/**
+ * Devuelve los grados oficiales según el nivel educativo ('Primaria' -> 1ro a 6to, 'Secundaria' -> 1ro a 5to).
+ */
+export function getStandardGradesForLevel(educationLevel = 'Secundaria'): string[] {
+  if (educationLevel === 'Primaria' || educationLevel === 'ALL') {
+    return [...PRIMARIA_GRADES];
+  }
+  return [...SECUNDARIA_GRADES];
+}
 
 /**
  * Devuelve las secciones oficiales permitidas según el grado seleccionado.
  * - Para 1ro (o Todos): A hasta M
- * - Para 2do, 3ro, 4to y 5to: A hasta I
+ * - Para 2do a 6to: A hasta I
  */
 export function getStandardSectionsForGrade(grade: string): string[] {
   const clean = grade.trim();
@@ -39,10 +90,10 @@ export function getStandardSectionsForGrade(grade: string): string[] {
 }
 
 /**
- * Obtiene la lista ordenada de niveles educativos disponibles en el padrón.
+ * Obtiene la lista ordenada de niveles educativos disponibles.
  */
 export function getAvailableLevels(students: Student[]): string[] {
-  const set = new Set<string>(['Secundaria']);
+  const set = new Set<string>(['Primaria', 'Secundaria']);
   for (const s of students) {
     const lvl = (s.education_level || 'Secundaria').trim();
     if (lvl) set.add(lvl);
@@ -51,10 +102,12 @@ export function getAvailableLevels(students: Student[]): string[] {
 }
 
 /**
- * Obtiene la lista ordenada de grados (1ro a 5to de Secundaria más cualquier otro importado).
+ * Obtiene la lista ordenada de grados según el nivel educativo seleccionado.
  */
 export function getAvailableGrades(students: Student[], educationLevel = 'ALL'): string[] {
-  const set = new Set<string>(SECUNDARIA_GRADES);
+  const baseGrades =
+    educationLevel === 'Secundaria' ? SECUNDARIA_GRADES : PRIMARIA_GRADES;
+  const set = new Set<string>(baseGrades);
   for (const s of students) {
     const lvl = (s.education_level || 'Secundaria').trim();
     if (educationLevel !== 'ALL' && lvl !== educationLevel) continue;

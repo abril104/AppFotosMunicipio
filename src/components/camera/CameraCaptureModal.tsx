@@ -24,7 +24,6 @@ import {
 import { uploadAndRegisterStudentPhoto } from '../../services/storageService.ts';
 import { normalizeError } from '../../utils/errorHandler.ts';
 import { StatusBadge } from '../ui/Badge.tsx';
-import { ConfirmDialog } from '../ui/ConfirmDialog.tsx';
 import { useToast } from '../ui/ToastProvider.tsx';
 
 interface CameraCaptureModalProps {
@@ -60,14 +59,15 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [jpegQuality, setJpegQuality] = useState<number>(DEFAULT_JPEG_QUALITY || 0.9);
 
-  // Estado de la fotografía capturada y recortada en memoria
+  // Estado de la fotografía capturada o seleccionada desde galería en memoria
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [capturedPreviewUrl, setCapturedPreviewUrl] = useState<string | null>(null);
   const [capturedDimensions, setCapturedDimensions] = useState<{ width: number; height: number } | null>(null);
+  // Indica exclusivamente si la captura/imagen ACTUAL en pantalla ya se guardó en la nube
+  const [isCurrentCaptureSaved, setIsCurrentCaptureSaved] = useState<boolean>(false);
 
   const [processState, setProcessState] = useState<VisualProcessState>('pendiente');
   const [saveErrorMsg, setSaveErrorMsg] = useState<string | null>(null);
-  const [confirmReplaceOpen, setConfirmReplaceOpen] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -161,6 +161,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     setCapturedBlob(null);
     setCapturedPreviewUrl(null);
     setCapturedDimensions(null);
+    setIsCurrentCaptureSaved(false);
     setSaveErrorMsg(null);
     setProcessState(
       student.photo_status === 'completada'
@@ -178,6 +179,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
 
   if (!open || !student) return null;
 
+  const isReplacementMode = student.photo_status === 'completada' && Boolean(student.photo_path);
+
   const currentIndex = studentsList.findIndex((s) => s.id === student.id);
   const prevStudent = currentIndex > 0 ? studentsList[currentIndex - 1] : null;
   const nextStudent =
@@ -193,6 +196,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   /**
    * Captura el fotograma actual y lo recorta exactamente según el recuadro de
    * "Encuadre sugerido" visible en la pantalla (proporción vertical 3:4).
+   * Al capturar una nueva foto (incluso en modo reemplazo), habilita el botón "Guardar fotografía".
    */
   const handleCaptureFromVideo = async () => {
     if (!videoRef.current || !cameraReady) return;
@@ -217,6 +221,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       setCapturedBlob(result.blob);
       setCapturedPreviewUrl(result.dataUrl);
       setCapturedDimensions({ width: result.width, height: result.height });
+      setIsCurrentCaptureSaved(false);
+      setProcessState('pendiente');
       stopCameraTracks();
     } catch (err) {
       const normalized = normalizeError(err);
@@ -229,11 +235,16 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     setCapturedBlob(null);
     setCapturedPreviewUrl(null);
     setCapturedDimensions(null);
+    setIsCurrentCaptureSaved(false);
     setSaveErrorMsg(null);
     setProcessState(student.photo_status === 'completada' ? 'guardada' : 'pendiente');
     void startCamera();
   };
 
+  /**
+   * Procesa una imagen seleccionada desde la galería o archivos del dispositivo,
+   * la recorta en proporción 3:4 y habilita inmediatamente el botón "Guardar fotografía".
+   */
   const handleFileUploadChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -250,6 +261,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       setCapturedBlob(result.blob);
       setCapturedPreviewUrl(result.dataUrl);
       setCapturedDimensions({ width: result.width, height: result.height });
+      setIsCurrentCaptureSaved(false);
+      setProcessState('pendiente');
     } catch (err) {
       const normalized = normalizeError(err);
       setSaveErrorMsg(normalized.userMessage);
@@ -257,10 +270,12 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     }
   };
 
+  /**
+   * Guarda la fotografía nueva o de reemplazo en Supabase Storage y actualiza PostgreSQL.
+   */
   const executeSavePhoto = async () => {
     if (!capturedBlob || !student) return;
 
-    setConfirmReplaceOpen(false);
     setProcessState('procesando');
     setSaveErrorMsg(null);
 
@@ -271,27 +286,20 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         capturedBlob
       );
 
+      setIsCurrentCaptureSaved(true);
       setProcessState('guardada');
       onPhotoSaved(updated);
       showToast(
         'success',
-        'Fotografía guardada correctamente',
-        `Se registró la fotografía recortada de ${updated.full_name} (${updated.dni}.jpg).`
+        isReplacementMode ? 'Fotografía reemplazada con éxito' : 'Fotografía guardada correctamente',
+        `Se guardó la imagen JPG de ${updated.full_name} (${updated.dni}.jpg).`
       );
     } catch (err) {
       const normalized = normalizeError(err);
+      setIsCurrentCaptureSaved(false);
       setProcessState('error');
       setSaveErrorMsg(normalized.userMessage);
       showToast('error', 'No se pudo guardar la fotografía', normalized.userMessage);
-    }
-  };
-
-  const handleRequestSave = () => {
-    if (!capturedBlob) return;
-    if (student.photo_status === 'completada' && student.photo_path) {
-      setConfirmReplaceOpen(true);
-    } else {
-      void executeSavePhoto();
     }
   };
 
@@ -316,6 +324,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         {/* Barra superior compacta */}
         <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 bg-slate-900 text-white">
           <div className="flex items-center gap-2 text-xs text-sky-300 font-semibold">
+            <span>{student.education_level || 'Secundaria'}</span>
+            <span>•</span>
             <span>
               {student.grade} "{student.section}"
             </span>
@@ -330,7 +340,15 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <StatusBadge state={processState} size="sm" />
+            <StatusBadge
+              state={processState}
+              labelOverride={
+                capturedPreviewUrl && !isCurrentCaptureSaved && processState === 'pendiente'
+                  ? 'Por guardar'
+                  : undefined
+              }
+              size="sm"
+            />
             <button
               type="button"
               onClick={handleCloseModal}
@@ -353,6 +371,15 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         )}
 
         <div className="p-3 sm:p-4 space-y-3">
+          {/* Input oculto para subir foto desde galería o computadora (siempre montado en el DOM) */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleFileUploadChange}
+            className="hidden"
+          />
+
           {/* 1. VENTANA DE LA CÁMARA CON RECORTE AL ENCUADRE SUGERIDO */}
           <div className="relative w-full h-[44vh] max-h-[360px] min-h-[250px] bg-slate-950 rounded-xl overflow-hidden border border-slate-300 flex items-center justify-center shadow-inner">
             {!capturedPreviewUrl ? (
@@ -365,7 +392,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                   className="w-full h-full object-cover"
                 />
 
-                {/* Guía visual de encuadre 3:4 (oscurece el exterior para mostrar exactamente el área que se recortará) */}
+                {/* Guía visual de encuadre 3:4 */}
                 {cameraReady && (
                   <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
                     <div
@@ -405,13 +432,13 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                         onClick={() => fileInputRef.current?.click()}
                         className="px-3 py-1.5 text-xs font-semibold bg-sky-600 text-white rounded-lg hover:bg-sky-500"
                       >
-                        Subir desde dispositivo
+                        Subir desde galería / equipo
                       </button>
                     </div>
                   </div>
                 )}
 
-                {/* Botón flotante para girar cámara (Frontal / Trasera) dentro de la esquina del visor */}
+                {/* Botón flotante para girar cámara (Frontal / Trasera) */}
                 {cameraReady && (
                   <button
                     type="button"
@@ -432,7 +459,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                   className="h-full aspect-3/4 object-cover rounded-lg border-2 border-emerald-400/80 shadow-lg"
                 />
                 <span className="absolute top-2.5 left-2.5 bg-slate-900/85 text-white text-[11px] px-2 py-0.5 rounded font-medium">
-                  Recortada ({capturedDimensions?.width}×{capturedDimensions?.height}px •{' '}
+                  {isCurrentCaptureSaved ? 'Guardada en la nube' : 'Lista para guardar'} (
+                  {capturedDimensions?.width}×{capturedDimensions?.height}px •{' '}
                   {capturedBlob ? `${Math.round(capturedBlob.size / 1024)} KB` : ''})
                 </span>
               </div>
@@ -451,7 +479,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
               <p className="text-xs text-slate-600 font-mono">
                 DNI: <strong className="text-slate-900">{student.dni}</strong> •{' '}
                 <span>
-                  {student.grade} "{student.section}"
+                  {student.education_level || 'Secundaria'} - {student.grade} "{student.section}"
                 </span>
               </p>
             </div>
@@ -478,18 +506,13 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                 className="w-full py-3.5 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-bold text-base shadow-md flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:cursor-not-allowed"
               >
                 <Camera className="w-5 h-5" />
-                <span>Capturar fotografía</span>
+                <span>
+                  {isReplacementMode ? 'Capturar nueva fotografía' : 'Capturar fotografía'}
+                </span>
               </button>
 
               {/* Controles secundarios compactos en una sola fila */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={handleFileUploadChange}
-                  className="hidden"
-                />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -497,7 +520,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
                 >
                   <Upload className="w-3.5 h-3.5" />
-                  <span>Subir archivo</span>
+                  <span>Subir foto de galería / PC</span>
                 </button>
 
                 {videoDevices.length > 1 && (
@@ -534,23 +557,29 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
             </div>
           ) : (
             <div className="space-y-2">
-              {processState !== 'guardada' ? (
+              {!isCurrentCaptureSaved ? (
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                   <button
                     type="button"
-                    onClick={handleRequestSave}
+                    onClick={() => void executeSavePhoto()}
                     disabled={processState === 'procesando'}
                     className="sm:col-span-8 py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold text-base shadow-md flex items-center justify-center gap-2 transition-colors cursor-pointer"
                   >
                     {processState === 'procesando' ? (
                       <>
                         <Loader2 className="w-5 h-5 animate-spin" />
-                        <span>Guardando...</span>
+                        <span>Guardando en la nube...</span>
                       </>
                     ) : (
                       <>
                         <Check className="w-5 h-5" />
-                        <span>{saveErrorMsg ? 'Reintentar guardado' : 'Guardar fotografía'}</span>
+                        <span>
+                          {saveErrorMsg
+                            ? 'Reintentar guardado'
+                            : isReplacementMode
+                            ? 'Guardar y reemplazar foto'
+                            : 'Guardar fotografía'}
+                        </span>
                       </>
                     )}
                   </button>
@@ -562,7 +591,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                     className="sm:col-span-4 py-3 px-3 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <RefreshCw className="w-4 h-4" />
-                    <span>Repetir</span>
+                    <span>Repetir / Otra</span>
                   </button>
                 </div>
               ) : (
@@ -621,18 +650,6 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Confirmación antes de reemplazar una fotografía existente */}
-      <ConfirmDialog
-        open={confirmReplaceOpen}
-        title="¿Reemplazar fotografía existente?"
-        description={`La estudiante ${student.full_name} (DNI: ${student.dni}) ya cuenta con una fotografía guardada en la nube. Al confirmar, se actualizará por la nueva captura recortada.`}
-        confirmLabel="Sí, reemplazar fotografía"
-        cancelLabel="Cancelar"
-        variant="warning"
-        onConfirm={() => void executeSavePhoto()}
-        onCancel={() => setConfirmReplaceOpen(false)}
-      />
     </div>
   );
 };

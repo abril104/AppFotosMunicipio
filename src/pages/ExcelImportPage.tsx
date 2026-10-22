@@ -25,8 +25,9 @@ import {
 } from '../utils/excelValidator.ts';
 import {
   GRADE_DISPLAY_NAMES,
-  SECUNDARIA_GRADES,
-  getStandardSectionsForGrade
+  getStandardGradesForLevel,
+  getStandardSectionsForGrade,
+  getUserEffectiveLevelScope
 } from '../utils/academicFilter.ts';
 import { importValidatedExcelRows } from '../services/studentService.ts';
 import { normalizeError } from '../utils/errorHandler.ts';
@@ -59,9 +60,13 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
     educationLevel: ''
   });
 
+  const userLevelScope = getUserEffectiveLevelScope(profile);
   const [parsedRows, setParsedRows] = useState<ParsedExcelRow[]>([]);
   const [filterView, setFilterView] = useState<'ALL' | 'ERRORS' | 'EXISTING'>('ALL');
   const [importing, setImporting] = useState<boolean>(false);
+  const [batchLevel, setBatchLevel] = useState<string>(
+    userLevelScope !== 'ALL' ? userLevelScope : 'Secundaria'
+  );
   const [batchGrade, setBatchGrade] = useState<string>('1ro');
   const [batchSection, setBatchSection] = useState<string>('A');
 
@@ -80,13 +85,17 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
     records: Array<Record<string, string>>,
     activeMapping: ColumnMapping
   ) => {
+    const defaultLvl = userLevelScope !== 'ALL' ? userLevelScope : batchLevel;
     const mappedInput = records.map((rec, idx) => ({
       rowIndex: idx + 2, // Considerando encabezado en fila 1
       dni: activeMapping.dni ? rec[activeMapping.dni] ?? '' : '',
       full_name: activeMapping.fullName ? rec[activeMapping.fullName] ?? '' : '',
-      education_level: activeMapping.educationLevel
-        ? rec[activeMapping.educationLevel] ?? 'Secundaria'
-        : 'Secundaria',
+      education_level:
+        userLevelScope !== 'ALL'
+          ? userLevelScope
+          : activeMapping.educationLevel
+          ? rec[activeMapping.educationLevel] || defaultLvl
+          : defaultLvl,
       grade: activeMapping.grade ? rec[activeMapping.grade] ?? '' : '',
       section: activeMapping.section ? rec[activeMapping.section] ?? '' : '',
       excluded: false,
@@ -213,16 +222,18 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
    * o a las filas que no tengan grado/sección especificados en el archivo Excel.
    */
   const handleApplyBatchGradeSection = (onlyMissing: boolean) => {
+    const effectiveLvl = userLevelScope !== 'ALL' ? userLevelScope : batchLevel;
     const nextInput = parsedRows.map((r) => ({
       ...r,
+      education_level: effectiveLvl,
       grade: onlyMissing ? r.grade || batchGrade : batchGrade,
       section: onlyMissing ? r.section || batchSection : batchSection
     }));
     setParsedRows(validateAndAnalyzeRows(nextInput, existingByDni));
     showToast(
       'info',
-      'Grado y sección asignados',
-      `Se aplicó ${batchGrade} "${batchSection}" ${
+      'Nivel, grado y sección asignados',
+      `Se aplicó ${effectiveLvl} - ${batchGrade} "${batchSection}" ${
         onlyMissing ? 'a las filas sin grado/sección' : 'a todas las filas cargadas'
       }.`
     );
@@ -421,11 +432,33 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
               ))}
             </div>
 
-            {/* Asignación rápida de Grado (1ro-5to) y Sección (A-M para 1ro, A-I para 2do-5to) */}
+            {/* Asignación rápida de Nivel (Primaria/Secundaria), Grado y Sección */}
             <div className="mt-4 pt-4 border-t border-slate-100 flex flex-wrap items-end gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Grado Secundaria (1ro a 5to)
+                  Nivel Educativo
+                </label>
+                <select
+                  value={userLevelScope !== 'ALL' ? userLevelScope : batchLevel}
+                  disabled={userLevelScope !== 'ALL'}
+                  onChange={(e) => {
+                    const nextLvl = e.target.value;
+                    setBatchLevel(nextLvl);
+                    const allowedGrades = getStandardGradesForLevel(nextLvl);
+                    if (!allowedGrades.includes(batchGrade)) {
+                      setBatchGrade(allowedGrades[0]);
+                    }
+                  }}
+                  className="px-3 py-1.5 text-xs sm:text-sm border border-slate-300 rounded-xl bg-slate-50 text-slate-900 font-semibold disabled:opacity-75"
+                >
+                  <option value="Primaria">Primaria (1ro a 6to)</option>
+                  <option value="Secundaria">Secundaria (1ro a 5to)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Grado
                 </label>
                 <select
                   value={batchGrade}
@@ -439,7 +472,9 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
                   }}
                   className="px-3 py-1.5 text-xs sm:text-sm border border-slate-300 rounded-xl bg-slate-50 text-slate-900 font-semibold"
                 >
-                  {SECUNDARIA_GRADES.map((g) => (
+                  {getStandardGradesForLevel(
+                    userLevelScope !== 'ALL' ? userLevelScope : batchLevel
+                  ).map((g) => (
                     <option key={g} value={g}>
                       {GRADE_DISPLAY_NAMES[g] || g}
                     </option>
@@ -725,14 +760,19 @@ export const ExcelImportPage: React.FC<ExcelImportPageProps> = ({
                           }`}
                         >
                           <option value="">-- Grado --</option>
-                          {SECUNDARIA_GRADES.map((g) => (
-                            <option key={g} value={g}>
-                              {g}
-                            </option>
-                          ))}
-                          {row.grade && !SECUNDARIA_GRADES.includes(row.grade as never) && (
-                            <option value={row.grade}>{row.grade}</option>
+                          {getStandardGradesForLevel(row.education_level || 'Secundaria').map(
+                            (g) => (
+                              <option key={g} value={g}>
+                                {g}
+                              </option>
+                            )
                           )}
+                          {row.grade &&
+                            !getStandardGradesForLevel(
+                              row.education_level || 'Secundaria'
+                            ).includes(row.grade) && (
+                              <option value={row.grade}>{row.grade}</option>
+                            )}
                         </select>
                       </td>
                       <td className="py-2.5 px-3">

@@ -151,7 +151,22 @@ export function normalizeGradeLabel(rawVal: unknown): string {
   if (/^(5|5to|5°|5º|quinto|quinto(\s+grado)?)$/.test(lower) || lower.startsWith('5to') || lower.startsWith('5°') || lower.startsWith('quinto')) {
     return '5to';
   }
+  if (/^(6|6to|6°|6º|sexto|sexto(\s+grado)?)$/.test(lower) || lower.startsWith('6to') || lower.startsWith('6°') || lower.startsWith('sexto')) {
+    return '6to';
+  }
 
+  return raw;
+}
+
+/**
+ * Normaliza el nivel educativo ("PRIMARIA", "Nivel Primaria" -> "Primaria"; "SECUNDARIA" -> "Secundaria").
+ */
+export function normalizeEducationLevel(rawVal: unknown, fallbackLevel = 'Secundaria'): string {
+  const raw = String(rawVal ?? '').replace(/\s+/g, ' ').trim();
+  if (!raw) return fallbackLevel;
+  const lower = raw.toLowerCase();
+  if (lower.includes('prim')) return 'Primaria';
+  if (lower.includes('sec')) return 'Secundaria';
   return raw;
 }
 
@@ -203,7 +218,7 @@ export function validateAndAnalyzeRows(
   const cleanedRows = rawRows.map((row) => {
     const dni = sanitizeDniText(row.dni);
     const full_name = String(row.full_name ?? '').replace(/\s+/g, ' ').trim();
-    const education_level = String(row.education_level ?? '').replace(/\s+/g, ' ').trim() || 'Secundaria';
+    const education_level = normalizeEducationLevel(row.education_level, 'Secundaria');
     const grade = normalizeGradeLabel(row.grade);
     const section = normalizeSectionLabel(row.section);
     const excluded = Boolean(row.excluded);

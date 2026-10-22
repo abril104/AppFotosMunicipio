@@ -34,7 +34,7 @@ export const StudentAvatar: React.FC<StudentAvatarProps> = ({
     }
 
     setLoading(true);
-    getAuthorizedPhotoSignedUrl(photoPath)
+    getAuthorizedPhotoSignedUrl(photoPath, Boolean(updatedAt))
       .then((url) => {
         if (active) {
           setSignedUrl(url);

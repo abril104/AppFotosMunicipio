@@ -16,6 +16,7 @@ import {
   calculateProgressMetrics,
   computeDashboardStats,
   filterAndSortStudents,
+  filterStudentsByUserScope,
   getAvailableGrades,
   getAvailableSections
 } from '../src/utils/academicFilter.ts';
@@ -255,6 +256,47 @@ describe('Fase 7: Seguridad, Permisos por Rol (RBAC) y Redacción de Datos Sensi
     // Usuario desactivado no tiene permiso para ninguna operación
     assert.equal(checkActionPermission(suspendedCtx, 'CAPTURE_PHOTO').allowed, false);
     assert.equal(checkActionPermission(suspendedCtx, 'IMPORT_PADRON').allowed, false);
+  });
+
+  it('aísla estrictamente la vista de estudiantes según el nivel educativo asignado al usuario (Primaria vs Secundaria)', () => {
+    const mixedRoster: Student[] = [
+      {
+        ...INITIAL_DEMO_STUDENTS[0],
+        id: 'p-1',
+        dni: '11111111',
+        education_level: 'Primaria',
+        grade: '5to',
+        section: 'A'
+      },
+      {
+        ...INITIAL_DEMO_STUDENTS[1],
+        id: 's-1',
+        dni: '22222222',
+        education_level: 'Secundaria',
+        grade: '1ro',
+        section: 'A'
+      }
+    ];
+
+    const secundariaOnly = filterStudentsByUserScope(mixedRoster, {
+      email: 'secundaria@colegio.edu.pe',
+      assigned_level: 'Secundaria'
+    });
+    assert.equal(secundariaOnly.length, 1);
+    assert.equal(secundariaOnly[0].education_level, 'Secundaria');
+
+    const primariaOnly = filterStudentsByUserScope(mixedRoster, {
+      email: 'primaria@colegio.edu.pe',
+      assigned_level: 'Primaria'
+    });
+    assert.equal(primariaOnly.length, 1);
+    assert.equal(primariaOnly[0].education_level, 'Primaria');
+
+    const allLevels = filterStudentsByUserScope(mixedRoster, {
+      email: 'admin@colegio.edu.pe',
+      assigned_level: 'ALL'
+    });
+    assert.equal(allLevels.length, 2);
   });
 
   it('redacta números de DNI de 8 dígitos y tokens JWT en mensajes técnicos de error', () => {

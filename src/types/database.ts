@@ -1,5 +1,7 @@
 export type UserRole = 'admin' | 'operator';
 
+export type UserEducationLevelScope = 'ALL' | 'Primaria' | 'Secundaria';
+
 export type PhotoStatus = 'pendiente' | 'completada' | 'retirada';
 
 export interface Profile {
@@ -7,6 +9,7 @@ export interface Profile {
   email: string;
   full_name: string;
   role: UserRole;
+  assigned_level?: UserEducationLevelScope;
   is_active: boolean;
   created_at: string;
   updated_at?: string;

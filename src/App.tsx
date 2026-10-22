@@ -21,6 +21,10 @@ import {
   subscribeToStudentsChanges,
   toggleStudentRetiredStatus
 } from './services/studentService.ts';
+import {
+  filterStudentsByUserScope,
+  getUserEffectiveLevelScope
+} from './utils/academicFilter.ts';
 import { IS_SUPABASE_CONFIGURED, supabase } from './services/supabaseClient.ts';
 import { AppLayout } from './components/layout/AppLayout.tsx';
 import { LoginPage } from './pages/LoginPage.tsx';
@@ -51,10 +55,31 @@ const AuthenticatedWorkspace: React.FC<{
   const navigate = useNavigate();
   const { showToast } = useToast();
 
+  const userLevelScope = getUserEffectiveLevelScope(profile);
+
   const [students, setStudents] = useState<Student[]>([]);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
   const [loadingData, setLoadingData] = useState<boolean>(true);
-  const [filters, setFilters] = useState<AcademicFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<AcademicFilters>(() => ({
+    ...DEFAULT_FILTERS,
+    educationLevel: userLevelScope !== 'ALL' ? userLevelScope : 'ALL'
+  }));
+
+  // Mantener bloqueado el filtro de nivel si el usuario pertenece exclusivamente a Primaria o Secundaria
+  useEffect(() => {
+    if (userLevelScope !== 'ALL' && filters.educationLevel !== userLevelScope) {
+      setFilters((prev) => ({
+        ...prev,
+        educationLevel: userLevelScope
+      }));
+    }
+  }, [userLevelScope, filters.educationLevel]);
+
+  // Estudiantes visibles según el nivel asignado al usuario (Secundaria solo ve Secundaria, Primaria solo ve Primaria)
+  const scopedStudents = React.useMemo(
+    () => filterStudentsByUserScope(students, profile),
+    [students, profile]
+  );
 
   // Estado del módulo de cámara y visor de fotografía
   const [cameraModalOpen, setCameraModalOpen] = useState<boolean>(false);
@@ -138,9 +163,17 @@ const AuthenticatedWorkspace: React.FC<{
     full_name: string;
     grade: string;
     section: string;
+    education_level?: string;
   }) => {
     try {
-      const created = await createSingleStudentRecord(profile, input);
+      const effectiveLevel =
+        userLevelScope !== 'ALL'
+          ? userLevelScope
+          : input.education_level || 'Secundaria';
+      const created = await createSingleStudentRecord(profile, {
+        ...input,
+        education_level: effectiveLevel
+      });
       setStudents((prev) =>
         [...prev, created].sort((a, b) =>
           a.full_name.localeCompare(b.full_name, 'es', { sensitivity: 'base' })
@@ -191,6 +224,7 @@ const AuthenticatedWorkspace: React.FC<{
   const handleNavigateToSection = (grade: string, section: string) => {
     setFilters({
       ...DEFAULT_FILTERS,
+      educationLevel: userLevelScope !== 'ALL' ? userLevelScope : 'ALL',
       grade,
       section
     });
@@ -219,7 +253,7 @@ const AuthenticatedWorkspace: React.FC<{
           path="/"
           element={
             <DashboardPage
-              students={students}
+              students={scopedStudents}
               profile={profile}
               onOpenStudentPhoto={(s) => setViewerStudent(s)}
               onNavigateToSection={handleNavigateToSection}
@@ -230,7 +264,7 @@ const AuthenticatedWorkspace: React.FC<{
           path="/estudiantes"
           element={
             <StudentsListPage
-              students={students}
+              students={scopedStudents}
               profile={profile}
               filters={filters}
               onChangeFilters={setFilters}
@@ -260,7 +294,7 @@ const AuthenticatedWorkspace: React.FC<{
         <Route
           path="/exportar"
           element={
-            <ExportPhotosPage profile={profile} students={students} />
+            <ExportPhotosPage profile={profile} students={scopedStudents} />
           }
         />
         <Route

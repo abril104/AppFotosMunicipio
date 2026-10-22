@@ -19,13 +19,14 @@ import type { Profile, Student } from '../types/database.ts';
 import type { AcademicFilters } from '../types/domain.ts';
 import {
   GRADE_DISPLAY_NAMES,
-  SECUNDARIA_GRADES,
   calculateProgressMetrics,
   filterAndSortStudents,
   getAvailableGrades,
   getAvailableLevels,
   getAvailableSections,
-  getStandardSectionsForGrade
+  getStandardGradesForLevel,
+  getStandardSectionsForGrade,
+  getUserEffectiveLevelScope
 } from '../utils/academicFilter.ts';
 import { StudentAvatar } from '../components/ui/StudentAvatar.tsx';
 import { StatusBadge } from '../components/ui/Badge.tsx';
@@ -44,6 +45,7 @@ interface StudentsListPageProps {
     full_name: string;
     grade: string;
     section: string;
+    education_level?: string;
   }) => Promise<void>;
   onDeleteStudent: (student: Student) => Promise<void>;
 }
@@ -67,10 +69,19 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
   const [studentToDeleteConfirm, setStudentToDeleteConfirm] = useState<Student | null>(null);
   const [processingAction, setProcessingAction] = useState<boolean>(false);
 
-  // Estado del modal para agregar una estudiante individualmente en su grado (1ro-5to) y sección (A-M / A-I)
+  const userLevelScope = getUserEffectiveLevelScope(profile);
+
+  // Estado del modal para agregar una estudiante individualmente en su nivel, grado y sección
   const [addStudentModalOpen, setAddStudentModalOpen] = useState<boolean>(false);
   const [newDni, setNewDni] = useState<string>('');
   const [newFullName, setNewFullName] = useState<string>('');
+  const [newEducationLevel, setNewEducationLevel] = useState<string>(
+    userLevelScope !== 'ALL'
+      ? userLevelScope
+      : filters.educationLevel !== 'ALL'
+      ? filters.educationLevel
+      : 'Secundaria'
+  );
   const [newGrade, setNewGrade] = useState<string>(
     filters.grade !== 'ALL' ? filters.grade : '1ro'
   );
@@ -153,6 +164,12 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
   };
 
   const handleOpenAddModal = () => {
+    const defaultLvl =
+      userLevelScope !== 'ALL'
+        ? userLevelScope
+        : filters.educationLevel !== 'ALL'
+        ? filters.educationLevel
+        : 'Secundaria';
     const defaultG = filters.grade !== 'ALL' ? filters.grade : '1ro';
     const allowedSecs = getStandardSectionsForGrade(defaultG);
     const defaultSec =
@@ -162,6 +179,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
 
     setNewDni('');
     setNewFullName('');
+    setNewEducationLevel(defaultLvl);
     setNewGrade(defaultG);
     setNewSection(defaultSec);
     setAddStudentModalOpen(true);
@@ -175,7 +193,8 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
         dni: newDni,
         full_name: newFullName,
         grade: newGrade,
-        section: newSection
+        section: newSection,
+        education_level: newEducationLevel
       });
       setAddStudentModalOpen(false);
     } finally {
@@ -235,7 +254,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
       {/* Panel de Filtros Académicos Dependientes y Buscador */}
       <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          {/* Nivel educativo (si está disponible) */}
+          {/* Nivel educativo (bloqueado si el usuario pertenece solo a Primaria o Secundaria) */}
           <div>
             <label
               htmlFor="filter-level"
@@ -245,16 +264,23 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
             </label>
             <select
               id="filter-level"
-              value={filters.educationLevel}
+              value={userLevelScope !== 'ALL' ? userLevelScope : filters.educationLevel}
+              disabled={userLevelScope !== 'ALL'}
               onChange={(e) => handleLevelChange(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-100 disabled:font-bold"
             >
-              <option value="ALL">Todos los niveles</option>
-              {levels.map((lvl) => (
-                <option key={lvl} value={lvl}>
-                  {lvl}
-                </option>
-              ))}
+              {userLevelScope === 'ALL' ? (
+                <>
+                  <option value="ALL">Todos los niveles</option>
+                  {levels.map((lvl) => (
+                    <option key={lvl} value={lvl}>
+                      {lvl}
+                    </option>
+                  ))}
+                </>
+              ) : (
+                <option value={userLevelScope}>Solo {userLevelScope}</option>
+              )}
             </select>
           </div>
 
@@ -844,10 +870,32 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Grado (1ro a 5to) *
+                    Nivel *
+                  </label>
+                  <select
+                    value={newEducationLevel}
+                    disabled={userLevelScope !== 'ALL'}
+                    onChange={(e) => {
+                      const nextLvl = e.target.value;
+                      setNewEducationLevel(nextLvl);
+                      const allowedGrades = getStandardGradesForLevel(nextLvl);
+                      if (!allowedGrades.includes(newGrade)) {
+                        setNewGrade(allowedGrades[0]);
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold disabled:bg-slate-100"
+                  >
+                    <option value="Primaria">Primaria</option>
+                    <option value="Secundaria">Secundaria</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Grado *
                   </label>
                   <select
                     value={newGrade}
@@ -861,7 +909,7 @@ export const StudentsListPage: React.FC<StudentsListPageProps> = ({
                     }}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl bg-white text-slate-900 font-semibold"
                   >
-                    {SECUNDARIA_GRADES.map((g) => (
+                    {getStandardGradesForLevel(newEducationLevel).map((g) => (
                       <option key={g} value={g}>
                         {GRADE_DISPLAY_NAMES[g] || g}
                       </option>

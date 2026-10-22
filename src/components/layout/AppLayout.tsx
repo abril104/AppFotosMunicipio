@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { Profile } from '../../types/database.ts';
 import { IS_SUPABASE_CONFIGURED, SUPABASE_SECURITY_WARNING } from '../../services/supabaseClient.ts';
+import { getUserEffectiveLevelScope } from '../../utils/academicFilter.ts';
 import { cn } from '../../utils/cn.ts';
 
 interface AppLayoutProps {
@@ -42,6 +43,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       window.removeEventListener('offline', onOffline);
     };
   }, []);
+
+  const userLevelScope = getUserEffectiveLevelScope(profile);
+  const levelBadgeLabel =
+    userLevelScope === 'ALL' ? 'Primaria y Secundaria' : `Nivel ${userLevelScope}`;
 
   const navItems = [
     {
@@ -146,6 +151,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
           <div className="min-w-0">
             <p className="text-xs font-semibold text-white truncate">{profile.full_name}</p>
+            <p className="text-[11px] text-sky-300 font-medium truncate">{levelBadgeLabel}</p>
             <p className="text-[11px] text-slate-400 truncate">{profile.email}</p>
           </div>
 
@@ -170,8 +176,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             </div>
             <div>
               <span className="text-sm font-bold block leading-none">Registro Fotográfico</span>
-              <span className="text-[10px] text-slate-400">
-                {profile.role === 'admin' ? 'Administrador' : 'Operador'} • {profile.full_name}
+              <span className="text-[10px] text-slate-300">
+                {levelBadgeLabel} • {profile.full_name}
               </span>
             </div>
           </div>

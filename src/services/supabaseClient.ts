@@ -35,3 +35,19 @@ export const supabase: SupabaseClient | null = IS_SUPABASE_CONFIGURED
       }
     })
   : null;
+
+/**
+ * Crea un cliente aislado sin persistencia de sesión en el navegador,
+ * utilizado exclusivamente cuando un Administrador da de alta una nueva cuenta
+ * desde el módulo de Usuarios sin cerrar su propia sesión.
+ */
+export function createIsolatedAuthClient(): SupabaseClient | null {
+  if (!IS_SUPABASE_CONFIGURED) return null;
+  return createClient(envUrl, envAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  });
+}
