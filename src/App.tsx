@@ -321,11 +321,16 @@ const AuthenticatedWorkspace: React.FC<{
         onPhotoSaved={handlePhotoSaved}
       />
 
-      {/* Modal para ver fotografía existente con URL firmada temporal */}
+      {/* Modal para ver fotografía existente, recortarla y guardarla directamente */}
       <PhotoViewerModal
         student={viewerStudent}
+        currentProfile={profile}
         onClose={() => setViewerStudent(null)}
-        onReplaceRequest={(s) => handleOpenCamera(s, students)}
+        onReplaceRequest={(s) => handleOpenCamera(s, scopedStudents)}
+        onPhotoUpdated={(updated) => {
+          handlePhotoSaved(updated);
+          setViewerStudent(updated);
+        }}
       />
     </AppLayout>
   );
